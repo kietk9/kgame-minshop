@@ -1,0 +1,95 @@
+---
+import type { Category, CategoryOption } from './db';
+
+interface Props {
+  action: string;
+  submitLabel: string;
+  category?: Category | null;
+  /** Valid parent choices (depth-tagged). For edit, excludes self + descendants. */
+  parentOptions: CategoryOption[];
+  error?: string | null;
+}
+
+const { action, submitLabel, category = null, parentOptions, error = null } = Astro.props;
+const inputClass =
+  'mt-1 w-full rounded-lg border border-line bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand focus:outline-none';
+---
+
+<form method="POST" action={action} class="max-w-lg space-y-5">
+  {
+    error && (
+      <div class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex items-center gap-2">
+        <svg class="w-5 h-5 text-red-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        <span>{error}</span>
+      </div>
+    )
+  }
+
+  <div class="rounded-xl border border-line bg-surface p-5 space-y-4 shadow-sm">
+    <div>
+      <label class="block text-sm font-semibold text-gray-900" for="name">
+        Tên danh mục <span class="text-red-500">*</span>
+      </label>
+      <input
+        id="name"
+        name="name"
+        type="text"
+        required
+        placeholder="VD: Cá dĩa, Cá tiên, Linh kiện, Máy bắn cá..."
+        value={category?.name ?? ''}
+        class={inputClass}
+      />
+      <p class="mt-1 text-xs text-gray-500">
+        Đổi tên danh mục tuyệt đối không làm thay đổi mã sản phẩm, tồn kho hay lịch sử máy.
+      </p>
+    </div>
+
+    <div>
+      <label class="block text-sm font-semibold text-gray-900" for="slug">
+        Đường dẫn / Mã nhóm (Slug) <span class="text-xs font-normal text-gray-400">(Để trống tự sinh theo tên)</span>
+      </label>
+      <input
+        id="slug"
+        name="slug"
+        type="text"
+        value={category?.slug ?? ''}
+        placeholder="VD: ca-dia, ca-tien, linh-kien"
+        class={inputClass}
+      />
+    </div>
+
+    <div>
+      <label class="block text-sm font-semibold text-gray-900" for="parent_id">
+        Danh mục cha (Cấp trên)
+      </label>
+      <select id="parent_id" name="parent_id" class={inputClass}>
+        <option value="">— Cấp cao nhất (Không có danh mục cha) —</option>
+        {
+          parentOptions.map((o) => (
+            <option value={o.public_id} selected={category?.parent_id === o.id}>
+              {'- '.repeat(o.depth) + o.name}
+            </option>
+          ))
+        }
+      </select>
+      <p class="mt-1 text-xs text-gray-500">
+        Cho phép tạo cây danh mục đa cấp (ví dụ: Linh kiện → Mạch tay).
+      </p>
+    </div>
+  </div>
+
+  <div class="flex items-center gap-3 pt-2">
+    <button
+      type="submit"
+      class="rounded-lg bg-brand px-6 py-2.5 text-sm font-semibold text-on-brand shadow-sm hover:bg-brand-hover transition-colors"
+    >
+      {submitLabel}
+    </button>
+    <a
+      href="/admin/categories"
+      class="rounded-lg border border-line px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+    >
+      Hủy bỏ
+    </a>
+  </div>
+</form>

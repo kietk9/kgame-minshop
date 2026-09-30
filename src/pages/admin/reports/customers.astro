@@ -1,0 +1,217 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import ReportSidebar from '../../../components/admin/ReportSidebar.astro';
+import { parseDatePreset } from '../../../features/reports/date-utils';
+
+if (!Astro.locals.settings?.setupComplete) return Astro.redirect('/admin/setup', 302);
+
+const url = new URL(Astro.request.url);
+const preset = url.searchParams.get('preset') || 'this_month';
+const customFrom = url.searchParams.get('from');
+const customTo = url.searchParams.get('to');
+const q = url.searchParams.get('q')?.trim() || '';
+const debtOnly = url.searchParams.get('debt_only') === '1';
+
+const dateRange = parseDatePreset(preset, customFrom, customTo);
+
+// Query doanh thu & công nợ theo từng khách hàng
+let sql = `
+  SELECT 
+    c.id,
+    COALESCE(c.customer_code, 'KH' || printf('%05d', c.id)) as customer_code,
+    c.name,
+    c.phone,
+    c.email,
+    c.note,
+    COUNT(o.id) as order_count,
+    COALESCE(SUM(o.amount_total_cents), 0) as total_sales,
+    COALESCE(SUM(o.paid_amount_cents), 0) as total_paid,
+    COALESCE(SUM(o.amount_total_cents - o.paid_amount_cents), 0) as current_debt
+  FROM customers c
+  JOIN orders o ON c.id = o.customer_id
+  WHERE DATE(o.created_at) >= ? AND DATE(o.created_at) <= ?
+    AND (o.order_status IS NULL OR o.order_status != 'CANCELLED')
+`;
+
+const params: any[] = [dateRange.startDate, dateRange.endDate];
+
+if (q) {
+  sql += ` AND (c.name LIKE ? OR c.phone LIKE ? OR c.customer_code LIKE ?)`;
+  params.push(`%${q}%`, `%${q}%`, `%${q}%`);
+}
+
+sql += ` GROUP BY c.id, c.name, c.phone`;
+
+if (debtOnly) {
+  sql += ` HAVING current_debt > 0`;
+}
+
+sql += ` ORDER BY total_sales DESC`;
+
+const { results: rawCustomers } = await env.DB.prepare(sql).bind(...params).all<{
+  id: number;
+  customer_code: string;
+  name: string;
+  phone: string;
+  email: string | null;
+  note: string | null;
+  order_count: number;
+  total_sales: number;
+  total_paid: number;
+  current_debt: number;
+}>();
+
+const customers = rawCustomers ?? [];
+
+const totalCustomerCount = customers.length;
+const totalSalesAll = customers.reduce((s, c) => s + (c.total_sales || 0), 0);
+const totalPaidAll = customers.reduce((s, c) => s + (c.total_paid || 0), 0);
+const totalDebtAll = customers.reduce((s, c) => s + Math.max(0, c.current_debt || 0), 0);
+
+function formatNum(cents: number) {
+  if (!cents || isNaN(cents)) return '0';
+  return new Intl.NumberFormat('en-US').format(cents);
+}
+
+const nowStr = new Date().toLocaleString('vi-VN', {
+  day: '2-digit', month: '2-digit', year: 'numeric',
+  hour: '2-digit', minute: '2-digit'
+});
+---
+
+<AdminLayout title="Báo cáo khách hàng" active="reports-customers">
+  <div class="flex flex-col lg:flex-row gap-4 items-start relative">
+    <!-- CỘT TRÁI: BỘ LỌC ĐỒNG BỘ -->
+    <ReportSidebar
+      actionUrl="/admin/reports/customers"
+      activeView="table"
+      showViewToggle={false}
+      preset={preset}
+      startDate={dateRange.startDate}
+      endDate={dateRange.endDate}
+      dateLabel={dateRange.label}
+    >
+      <div>
+        <label class="block text-[12px] font-bold text-gray-500 uppercase tracking-wider mb-1">
+          Tìm khách hàng
+        </label>
+        <input
+          type="text"
+          name="q"
+          value={q}
+          placeholder="Tên, số điện thoại, mã..."
+          class="w-full h-[34px] px-2.5 bg-white border border-gray-300 rounded-lg text-[13.5px] text-gray-800 focus:border-[#00a2ff] focus:outline-none"
+        />
+      </div>
+
+      <div class="pt-1">
+        <label class="flex items-center gap-2 cursor-pointer text-[13px] text-gray-700">
+          <input
+            type="checkbox"
+            name="debt_only"
+            value="1"
+            checked={debtOnly}
+            class="h-4 w-4 rounded border-gray-300 text-[#00a2ff] focus:ring-[#00a2ff]"
+          />
+          <span class="font-medium">Chỉ hiện khách còn nợ</span>
+        </label>
+      </div>
+    </ReportSidebar>
+
+    <!-- KHU VỰC NỘI DUNG CHÍNH -->
+    <main class="flex-1 w-full bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+      <!-- HEADER BÁO CÁO -->
+      <div class="p-5 border-b border-gray-100 bg-white">
+        <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
+          <span>Ngày lập: {nowStr}</span>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              onclick="window.print()"
+              class="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-md text-xs transition"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+              </svg>
+              In báo cáo
+            </button>
+          </div>
+        </div>
+
+        <div class="text-center py-2">
+          <h1 class="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">
+            Báo cáo bán hàng theo khách hàng & Công nợ
+          </h1>
+          <p class="text-[13.5px] text-gray-600 mt-1">
+            Từ ngày <strong class="text-gray-900">{dateRange.startDate}</strong> đến ngày <strong class="text-gray-900">{dateRange.endDate}</strong>
+          </p>
+        </div>
+
+        <!-- 4 THẺ KPI KHÁCH HÀNG -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-gray-100 text-center">
+          <div class="p-3 bg-blue-50/50 rounded-lg border border-blue-100">
+            <span class="text-[11.5px] font-bold uppercase tracking-wider text-blue-600">Khách mua hàng</span>
+            <p class="text-xl font-bold text-blue-900 mt-1 tabular-nums">{totalCustomerCount} <span class="text-xs font-normal">khách</span></p>
+          </div>
+          <div class="p-3 bg-indigo-50/50 rounded-lg border border-indigo-100">
+            <span class="text-[11.5px] font-bold uppercase tracking-wider text-indigo-600">Tổng doanh thu</span>
+            <p class="text-xl font-bold text-indigo-900 mt-1 tabular-nums">{formatNum(totalSalesAll)}</p>
+          </div>
+          <div class="p-3 bg-emerald-50/50 rounded-lg border border-emerald-100">
+            <span class="text-[11.5px] font-bold uppercase tracking-wider text-emerald-600">Đã thanh toán</span>
+            <p class="text-xl font-bold text-emerald-900 mt-1 tabular-nums">{formatNum(totalPaidAll)}</p>
+          </div>
+          <div class="p-3 bg-red-50/50 rounded-lg border border-red-100">
+            <span class="text-[11.5px] font-bold uppercase tracking-wider text-red-600">Tổng nợ còn thiếu</span>
+            <p class="text-xl font-bold text-red-900 mt-1 tabular-nums">{formatNum(totalDebtAll)}</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- BẢNG CHI TIẾT THEO KHÁCH HÀNG -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-[14.5px] text-gray-800">
+          <thead>
+            <tr class="bg-[#dcf0fb] border-b border-[#bce2f7] text-[#006ca8] font-bold text-[14px]">
+              <th class="py-3 px-4">Mã KH</th>
+              <th class="py-3 px-4">Tên khách hàng</th>
+              <th class="py-3 px-4">Điện thoại</th>
+              <th class="py-3 px-4 text-right tabular-nums">Số đơn</th>
+              <th class="py-3 px-4 text-right tabular-nums text-blue-700">Tổng mua</th>
+              <th class="py-3 px-4 text-right tabular-nums text-emerald-700">Đã trả</th>
+              <th class="py-3 px-4 text-right tabular-nums text-red-600">Nợ hiện tại</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">
+            {customers.map(c => (
+              <tr class="hover:bg-blue-50/40 transition">
+                <td class="py-3 px-4">
+                  <a href={`/admin/customers?q=${encodeURIComponent(c.phone || c.name)}`} class="text-[#00a2ff] hover:underline font-normal tabular-nums">
+                    {c.customer_code}
+                  </a>
+                </td>
+                <td class="py-3 px-4 font-normal text-gray-900">{c.name}</td>
+                <td class="py-3 px-4 font-normal text-gray-600 tabular-nums">{c.phone || '—'}</td>
+                <td class="py-3 px-4 text-right tabular-nums font-normal text-gray-700">{c.order_count}</td>
+                <td class="py-3 px-4 text-right tabular-nums font-semibold text-gray-900">{formatNum(c.total_sales)}</td>
+                <td class="py-3 px-4 text-right tabular-nums text-emerald-700">{formatNum(c.total_paid)}</td>
+                <td class={`py-3 px-4 text-right tabular-nums font-semibold ${c.current_debt > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                  {c.current_debt > 0 ? formatNum(c.current_debt) : '0'}
+                </td>
+              </tr>
+            ))}
+
+            {customers.length === 0 && (
+              <tr>
+                <td colspan="7" class="py-12 text-center text-gray-400 text-sm">
+                  Không tìm thấy khách hàng nào trong khoảng thời gian đã chọn.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+</AdminLayout>

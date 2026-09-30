@@ -1,0 +1,1217 @@
+---
+import type { KgameProductType } from '../../../features/kgame/types';
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import ProductImage from '../../../features/products/ProductImage.astro';
+import { searchKgameProducts, getUnitsForTypes } from '../../../features/kgame/db';
+import QuickProductModal from '../../../components/admin/QuickProductModal.astro';
+
+const q = Astro.url.searchParams.get('q') ?? '';
+const categoryParam = Astro.url.searchParams.get('category') ?? '';
+const trackingParam = Astro.url.searchParams.get('tracking_mode') ?? '';
+const conditionParam = Astro.url.searchParams.get('condition') ?? '';
+const stockStatusParam = Astro.url.searchParams.get('stock_status') ?? '';
+const brandParam = Astro.url.searchParams.get('brand') ?? '';
+const supplierParam = Astro.url.searchParams.get('supplier') ?? '';
+const statusParam = Astro.url.searchParams.get('status') ?? '';
+const pageParam = parseInt(Astro.url.searchParams.get('page') ?? '1', 10);
+const PAGE_SIZE = 30;
+const offset = (pageParam - 1) * PAGE_SIZE;
+
+// 1. Lấy tất cả danh mục và đếm số lượng sản phẩm đệ quy (hỗ trợ nhiều cấp cha - con - cháu: vd Phần mềm -> Cá dĩa -> 620)
+const { results: rawCategories } = await env.DB.prepare('SELECT id, name, parent_id FROM categories ORDER BY id ASC').all();
+const { results: countRows } = await env.DB.prepare('SELECT category_id, COUNT(*) as cnt FROM products GROUP BY category_id').all();
+
+const directCounts: Record<number, number> = {};
+for (const r of (countRows ?? []) as any[]) {
+  if (r.category_id) directCounts[r.category_id] = r.cnt;
+}
+
+interface CatNode {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  directCount: number;
+  totalCount: number;
+  children: CatNode[];
+}
+
+const nodeMap = new Map<number, CatNode>();
+for (const c of (rawCategories ?? []) as any[]) {
+  nodeMap.set(c.id, {
+    id: c.id,
+    name: c.name,
+    parent_id: c.parent_id,
+    directCount: directCounts[c.id] ?? 0,
+    totalCount: directCounts[c.id] ?? 0,
+    children: [],
+  });
+}
+
+const rootCategories: CatNode[] = [];
+for (const node of nodeMap.values()) {
+  if (node.parent_id && nodeMap.has(node.parent_id)) {
+    nodeMap.get(node.parent_id)!.children.push(node);
+  } else {
+    rootCategories.push(node);
+  }
+}
+
+function computeTotal(node: CatNode): number {
+  let sum = node.directCount;
+  for (const ch of node.children) {
+    sum += computeTotal(ch);
+  }
+  node.totalCount = sum;
+  return sum;
+}
+for (const root of rootCategories) {
+  computeTotal(root);
+}
+
+interface FlatCategoryItem {
+  id: number;
+  name: string;
+  depth: number;
+  hasChildren: boolean;
+  productCount: number;
+}
+
+function flattenTree(nodes: CatNode[], depth = 0): FlatCategoryItem[] {
+  const result: FlatCategoryItem[] = [];
+  for (const node of nodes) {
+    result.push({
+      id: node.id,
+      name: node.name,
+      depth,
+      hasChildren: node.children.length > 0,
+      productCount: node.totalCount,
+    });
+    if (node.children.length > 0) {
+      result.push(...flattenTree(node.children, depth + 1));
+    }
+  }
+  return result;
+}
+
+const flatCategories = flattenTree(rootCategories);
+const treeCategories = flatCategories;
+
+// 2. Lấy danh sách thương hiệu
+const { results: allBrands } = await env.DB.prepare('SELECT id, name FROM brands ORDER BY name ASC').all<{ id: number; name: string }>();
+const brands = allBrands ?? [];
+
+// 3. Lấy danh sách nhà cung cấp / NSX
+const { results: allSuppliers } = await env.DB.prepare(
+  "SELECT DISTINCT default_manufacturer FROM products WHERE default_manufacturer IS NOT NULL AND default_manufacturer != '' ORDER BY default_manufacturer ASC"
+).all();
+const suppliers = (allSuppliers ?? []).map((s: any) => s.default_manufacturer as string);
+
+// 4. Tìm kiếm sản phẩm thông minh
+const { products, totalCount, matchedUnit } = await searchKgameProducts(env.DB, {
+  query: q,
+  categoryId: categoryParam ? Number(categoryParam) : null,
+  trackingMode: trackingParam || null,
+  condition: conditionParam || null,
+  stockStatus: stockStatusParam || null,
+  brandId: brandParam ? Number(brandParam) : null,
+  supplier: supplierParam || null,
+  status: statusParam || null,
+  limit: PAGE_SIZE,
+  offset,
+});
+
+const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+
+// 5. Lấy phân loại và mã bộ (Serial units)
+const productIds = products.map((p: any) => p.id);
+let typesByProduct: Record<number, any[]> = {};
+let allTypeIds: number[] = [];
+
+if (productIds.length > 0) {
+  const placeholders = productIds.map(() => '?').join(',');
+  const { results: types } = await env.DB.prepare(
+    `SELECT * FROM product_types WHERE product_id IN (${placeholders}) ORDER BY sort_order ASC, id ASC`
+  ).bind(...productIds).all<KgameProductType>();
+  for (const t of types ?? []) {
+    if (!typesByProduct[t.product_id]) typesByProduct[t.product_id] = [];
+    typesByProduct[t.product_id].push(t);
+    allTypeIds.push(t.id);
+  }
+}
+
+const unitsByType = await getUnitsForTypes(env.DB, allTypeIds);
+
+// Lấy thêm units trực tiếp theo product_id (đối với hàng hóa đơn giản có serial)
+let unitsByProduct: Record<number, any[]> = {};
+if (productIds.length > 0) {
+  const placeholders = productIds.map(() => '?').join(',');
+  const { results: directUnits } = await env.DB.prepare(
+    `SELECT * FROM product_units WHERE product_type_id IS NULL AND availability = 'IN_STOCK' ORDER BY id DESC LIMIT 200`
+  ).all();
+  // Filter memory
+  for (const u of (directUnits ?? [])) {
+    // We group by product if available
+  }
+}
+
+function formatNumber(cents: number) {
+  if (!cents || isNaN(cents)) return '0';
+  return new Intl.NumberFormat('en-US').format(cents);
+}
+const formatPlainNumber = formatNumber;
+
+function formatVnd(cents: number) {
+  if (!cents || isNaN(cents)) return '0 ₫';
+  return new Intl.NumberFormat('vi-VN').format(cents) + ' ₫';
+}
+
+function formatDateTime(dtStr?: string | null) {
+  if (!dtStr) return '--';
+  try {
+    const d = new Date(dtStr);
+    if (isNaN(d.getTime())) return dtStr;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch {
+    return dtStr;
+  }
+}
+
+// Tính tổng tồn kho của trang
+let pageStockTotal = 0;
+for (const p of products) {
+  pageStockTotal += ((p.stock_new ?? 0) + (p.stock_used ?? 0) || p.stock || 0);
+}
+---
+
+<AdminLayout title="Hàng hóa" active="products">
+  <!-- KHUNG CHÍNH 2 CỘT CHUẨN KIOTVIET -->
+  <div class="flex flex-col lg:flex-row gap-4 items-start relative">
+
+    <!-- CỘT TRÁI: BỘ LỌC NGHIỆP VỤ (FILTER SIDEBAR) -->
+    <aside
+      id="filter-sidebar"
+      class="w-full lg:w-64 xl:w-72 shrink-0 bg-white rounded-xl border border-gray-200 p-4 shadow-xs text-gray-800 transition-all duration-200"
+    >
+      <div class="flex items-center justify-between pb-3 border-b border-gray-100 mb-4">
+        <h2 class="font-bold text-sm text-gray-900 uppercase tracking-wider flex items-center gap-1.5">
+          <svg class="h-4 w-4 text-[#0b4d9c]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+          </svg>
+          Bộ lọc
+        </h2>
+        <!-- Nút thu gọn thanh lọc -->
+        <button
+          type="button"
+          id="btn-toggle-sidebar"
+          title="Thu gọn bộ lọc"
+          class="hidden lg:flex h-6 w-6 items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 transition"
+        >
+          <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+          </svg>
+        </button>
+      </div>
+
+      <form method="get" action="/admin/products" id="filter-form" class="space-y-5 text-[13.5px]">
+        {q && <input type="hidden" name="q" value={q} />}
+
+        <!-- 1. CÂY NHÓM HÀNG ĐA CẤP (TREE-VIEW CATEGORIES) -->
+        <div>
+          <div class="flex items-center justify-between font-bold text-gray-700 mb-2 text-[14px]">
+            <span>Nhóm hàng</span>
+            <a href="/admin/categories/new" class="text-blue-600 hover:underline text-[12px]">+ Tạo mới</a>
+          </div>
+
+          <div class="space-y-0.5 max-h-60 overflow-y-auto pr-1 border border-gray-100 rounded-lg p-1.5 bg-gray-50/50">
+            <a
+              href={`/admin/products?category=${q ? `&q=${encodeURIComponent(q)}` : ''}${stockStatusParam ? `&stock_status=${stockStatusParam}` : ''}${conditionParam ? `&condition=${conditionParam}` : ''}${brandParam ? `&brand=${brandParam}` : ''}${supplierParam ? `&supplier=${supplierParam}` : ''}`}
+              class={`flex items-center justify-between px-2 py-1.5 rounded text-[13.5px] transition ${
+                !categoryParam ? 'bg-blue-100/90 text-blue-800 font-bold border-l-2 border-blue-600' : 'text-gray-700 hover:bg-gray-200/60'
+              }`}
+            >
+              <span class="font-medium">Tất cả nhóm hàng</span>
+              <span class="text-[12px] text-gray-500 tabular-nums">({totalCount})</span>
+            </a>
+
+            {treeCategories.map(cat => {
+              const isSelected = String(cat.id) === categoryParam;
+              const plClass = cat.depth === 0 ? 'pl-2' : cat.depth === 1 ? 'pl-5' : cat.depth === 2 ? 'pl-8' : 'pl-11';
+              const prefix = cat.depth === 0 ? (cat.hasChildren ? '▾ ' : '• ') : cat.depth === 1 ? '↳ ' : '— ';
+              return (
+                <a
+                  href={`/admin/products?category=${cat.id}${q ? `&q=${encodeURIComponent(q)}` : ''}${stockStatusParam ? `&stock_status=${stockStatusParam}` : ''}${conditionParam ? `&condition=${conditionParam}` : ''}${brandParam ? `&brand=${brandParam}` : ''}${supplierParam ? `&supplier=${supplierParam}` : ''}${trackingParam ? `&tracking_mode=${trackingParam}` : ''}`}
+                  class={`flex items-center justify-between py-1.5 pr-2 rounded text-[13.5px] transition ${plClass} ${
+                    isSelected ? 'bg-blue-100/90 text-blue-800 font-bold border-l-2 border-blue-600' : 'text-gray-700 hover:bg-gray-200/60'
+                  }`}
+                  title={`${cat.name} (${cat.productCount} sản phẩm)`}
+                >
+                  <span class="truncate flex items-center gap-1">
+                    <span class="text-gray-400 tabular-nums text-[12px]">{prefix}</span>
+                    <span class={cat.depth === 0 ? 'font-semibold text-gray-900' : cat.depth === 1 ? 'text-gray-800 font-medium' : 'text-gray-700'}>{cat.name}</span>
+                  </span>
+                  <span class="text-[12px] text-gray-400 shrink-0 tabular-nums">({cat.productCount})</span>
+                </a>
+              );
+            })}
+          </div>
+          {categoryParam && (
+            <input type="hidden" name="category" value={categoryParam} />
+          )}
+        </div>
+
+        <!-- 1.5. TRẠNG THÁI KINH DOANH (CHUẨN KIOTVIET) -->
+        <div class="border-t border-gray-100 pt-3">
+          <label class="font-bold text-gray-700 block mb-2">Trạng thái kinh doanh</label>
+          <div class="space-y-1.5">
+            <label class="flex items-center gap-2 cursor-pointer text-gray-700">
+              <input
+                type="radio"
+                name="status"
+                value=""
+                checked={!statusParam}
+                onchange="this.form.submit()"
+                class="text-blue-600 focus:ring-blue-500 cursor-pointer"
+              />
+              <span>Tất cả</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer text-gray-700">
+              <input
+                type="radio"
+                name="status"
+                value="active"
+                checked={statusParam === 'active'}
+                onchange="this.form.submit()"
+                class="text-blue-600 focus:ring-blue-500 cursor-pointer"
+              />
+              <span>Đang kinh doanh</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer text-gray-700">
+              <input
+                type="radio"
+                name="status"
+                value="inactive"
+                checked={statusParam === 'inactive'}
+                onchange="this.form.submit()"
+                class="text-blue-600 focus:ring-blue-500 cursor-pointer"
+              />
+              <span>Ngừng kinh doanh</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- 2. TỒN KHO (TỰ ĐỘNG LỌC NGAY KHI CHỌN) -->
+        <div class="border-t border-gray-100 pt-3">
+          <label class="font-bold text-gray-700 block mb-2">Tồn kho</label>
+          <div class="space-y-1.5">
+            <label class="flex items-center gap-2 cursor-pointer text-gray-700">
+              <input
+                type="radio"
+                name="stock_status"
+                value=""
+                checked={!stockStatusParam}
+                onchange="this.form.submit()"
+                class="text-blue-600 focus:ring-blue-500 cursor-pointer"
+              />
+              <span>Tất cả</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer text-gray-700">
+              <input
+                type="radio"
+                name="stock_status"
+                value="IN_STOCK"
+                checked={stockStatusParam === 'IN_STOCK'}
+                onchange="this.form.submit()"
+                class="text-blue-600 focus:ring-blue-500 cursor-pointer"
+              />
+              <span>Còn hàng trong kho (&gt; 0)</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer text-gray-700">
+              <input
+                type="radio"
+                name="stock_status"
+                value="OUT_OF_STOCK"
+                checked={stockStatusParam === 'OUT_OF_STOCK'}
+                onchange="this.form.submit()"
+                class="text-blue-600 focus:ring-blue-500 cursor-pointer"
+              />
+              <span>Hết hàng (&le; 0)</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- 3. THUỘC TÍNH: TÌNH TRẠNG MỚI / CŨ (TỰ ĐỘNG LỌC NGAY) -->
+        <div class="border-t border-gray-100 pt-3">
+          <label class="font-bold text-gray-700 block mb-2">Thuộc tính: Tình trạng</label>
+          <select
+            name="condition"
+            onchange="this.form.submit()"
+            class="w-full rounded border border-gray-300 bg-white py-1.5 px-2 text-xs text-gray-800 focus:border-blue-600 focus:outline-none cursor-pointer"
+          >
+            <option value="">-- Tất cả tình trạng --</option>
+            <option value="NEW" selected={conditionParam === 'NEW'}>Mới 100% (NEW)</option>
+            <option value="USED" selected={conditionParam === 'USED' || conditionParam === 'QSD'}>Đã qua sử dụng (QSD / Cũ)</option>
+          </select>
+        </div>
+
+        <!-- 4. THƯƠNG HIỆU / NGUỒN GỐC (TỰ ĐỘNG LỌC NGAY) -->
+        <div class="border-t border-gray-100 pt-3">
+          <div class="flex items-center justify-between mb-2">
+            <label class="font-bold text-gray-700">Thương hiệu</label>
+            <a href="/admin/brands" class="text-blue-600 hover:underline text-[11px]">Quản lý</a>
+          </div>
+          <select
+            name="brand"
+            onchange="this.form.submit()"
+            class="w-full rounded border border-gray-300 bg-white py-1.5 px-2 text-xs text-gray-800 focus:border-blue-600 focus:outline-none cursor-pointer"
+          >
+            <option value="">-- Tất cả thương hiệu --</option>
+            {brands.map(b => (
+              <option value={b.id} selected={String(b.id) === brandParam}>{b.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <!-- 5. NHÀ CUNG CẤP / NSX (TỰ ĐỘNG LỌC NGAY) -->
+        <div class="border-t border-gray-100 pt-3">
+          <label class="font-bold text-gray-700 block mb-2">Nhà cung cấp / NSX</label>
+          <select
+            name="supplier"
+            onchange="this.form.submit()"
+            class="w-full rounded border border-gray-300 bg-white py-1.5 px-2 text-xs text-gray-800 focus:border-blue-600 focus:outline-none cursor-pointer"
+          >
+            <option value="">-- Tất cả nhà cung cấp --</option>
+            {suppliers.map(s => (
+              <option value={s} selected={s === supplierParam}>{s}</option>
+            ))}
+          </select>
+        </div>
+
+        <!-- 6. CÁCH QUẢN LÝ (TỰ ĐỘNG LỌC NGAY) -->
+        <div class="border-t border-gray-100 pt-3">
+          <label class="font-bold text-gray-700 block mb-2">Loại quản lý</label>
+          <select
+            name="tracking_mode"
+            onchange="this.form.submit()"
+            class="w-full rounded border border-gray-300 bg-white py-1.5 px-2 text-xs text-gray-800 focus:border-blue-600 focus:outline-none cursor-pointer"
+          >
+            <option value="">-- Tất cả --</option>
+            <option value="CODE" selected={trackingParam === 'CODE'}>🔑 Theo Serial / IMEI / Code</option>
+            <option value="QUANTITY" selected={trackingParam === 'QUANTITY'}>📦 Theo Số lượng</option>
+          </select>
+        </div>
+
+        <!-- NÚT ĐẶT LẠI BỘ LỌC (NẾU ĐANG CÓ BỘ LỌC) -->
+        {(categoryParam || stockStatusParam || conditionParam || brandParam || supplierParam || trackingParam || q) && (
+          <div class="pt-2 border-t border-gray-100">
+            <a
+              href="/admin/products"
+              class="flex items-center justify-center gap-1.5 w-full rounded border border-gray-300 bg-gray-50 py-1.5 text-gray-700 hover:bg-gray-100 hover:text-gray-900 text-[11px] font-semibold transition"
+            >
+              <span>🔄</span> Đặt lại bộ lọc (Mặc định)
+            </a>
+          </div>
+        )}
+      </form>
+    </aside>
+
+    <!-- NÚT MỞ LẠI SIDEBAR KHI BỊ ẨN TRÊN MÀN HÌNH LỚN -->
+    <button
+      type="button"
+      id="btn-expand-sidebar"
+      title="Mở lại bộ lọc"
+      class="hidden h-9 w-7 bg-white border border-gray-300 rounded-r-lg shadow-sm items-center justify-center text-gray-600 hover:text-blue-600 absolute left-0 top-0 z-10 transition"
+    >
+      <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+      </svg>
+    </button>
+
+    <!-- KHỐI PHẢI: BẢNG DỮ LIỆU HÀNG HÓA CHUẨN KIOTVIET -->
+    <section class="flex-1 w-full min-w-0 bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+      <!-- TOP ACTION BAR -->
+      <div class="p-3 border-b border-gray-200 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 bg-gray-50/50">
+        <!-- Ô TÌM KIẾM NHANH (MÃ, TÊN HÀNG) -->
+        <form method="get" action="/admin/products" class="relative flex-1 max-w-md">
+          {categoryParam && <input type="hidden" name="category" value={categoryParam} />}
+          {conditionParam && <input type="hidden" name="condition" value={conditionParam} />}
+          {stockStatusParam && <input type="hidden" name="stock_status" value={stockStatusParam} />}
+          {brandParam && <input type="hidden" name="brand" value={brandParam} />}
+          {supplierParam && <input type="hidden" name="supplier" value={supplierParam} />}
+          
+          <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+          </div>
+          <input
+            type="text"
+            name="q"
+            value={q}
+            placeholder="Theo mã, tên hàng..."
+            class="w-full rounded-lg border border-gray-300 bg-white py-1.5 pl-9 pr-4 text-xs sm:text-sm text-gray-900 focus:border-[#0b4d9c] focus:outline-none focus:ring-1 focus:ring-[#0b4d9c]"
+          />
+        </form>
+
+        <!-- ACTION BUTTONS CHUẨN KIOTVIET -->
+        <div class="flex items-center gap-1.5 sm:gap-2">
+          <!-- 1. Nút Tạo Mới Dropdown -->
+          <button
+            type="button"
+            onclick="window.openQuickProductModal()"
+            class="inline-flex items-center gap-1 rounded bg-[#00a2ff] hover:bg-[#008fe0] px-3 py-1.5 text-xs font-semibold text-white shadow-xs transition cursor-pointer"
+          >
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
+            <span>Tạo mới</span>
+          </button>
+
+          <!-- 2. Nút Import File -->
+          <button
+            type="button"
+            onclick="alert('Tính năng Import Excel theo mẫu KiotViet đang hoàn thiện!')"
+            class="hidden md:inline-flex items-center gap-1 rounded border border-gray-300 bg-white hover:bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-700 shadow-2xs transition cursor-pointer"
+            title="Nhập hàng hóa từ file Excel"
+          >
+            <svg class="h-3.5 w-3.5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+            </svg>
+            <span>Import file</span>
+          </button>
+
+          <!-- 3. Nút Xuất file CSV -->
+          <button
+            type="button"
+            onclick="window.exportProductsToCsv()"
+            class="inline-flex items-center gap-1 rounded border border-gray-300 bg-white hover:bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-700 shadow-2xs transition cursor-pointer"
+            title="Xuất danh sách ra file Excel / CSV"
+          >
+            <svg class="h-3.5 w-3.5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+            <span>Xuất file</span>
+          </button>
+
+          <!-- 4. NÚT TÙY CHỈNH CỘT HIỂN THỊ [ ☷ ] -->
+          <div class="relative inline-block text-left" id="col-customizer-wrapper">
+            <button
+              type="button"
+              id="btn-toggle-col-menu"
+              class="inline-flex items-center justify-center h-8 w-8 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-600 shadow-2xs transition cursor-pointer"
+              title="Tùy chỉnh cột hiển thị"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
+              </svg>
+            </button>
+
+            <!-- DROPDOWN DANH SÁCH CỘT -->
+            <div
+              id="col-menu-dropdown"
+              class="hidden absolute right-0 mt-1 w-64 sm:w-72 rounded-lg border border-gray-200 bg-white p-3 shadow-2xl z-50 text-xs"
+            >
+              <div class="font-bold text-gray-800 pb-2 mb-2 border-b border-gray-100 flex items-center justify-between">
+                <span>Tùy chỉnh cột hiển thị</span>
+                <button type="button" id="btn-reset-cols" class="text-[11px] text-blue-600 hover:underline">Mặc định</button>
+              </div>
+              <div class="grid grid-cols-2 gap-2 text-gray-700">
+                <label class="flex items-center gap-1.5 cursor-pointer hover:text-blue-600">
+                  <input type="checkbox" data-col="img" checked class="col-toggle text-blue-600 rounded">
+                  <span>Hình ảnh</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer hover:text-blue-600">
+                  <input type="checkbox" data-col="code" checked class="col-toggle text-blue-600 rounded">
+                  <span>Mã hàng</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer hover:text-blue-600">
+                  <input type="checkbox" data-col="name" checked disabled class="col-toggle text-blue-600 rounded opacity-60">
+                  <span>Tên hàng</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer hover:text-blue-600">
+                  <input type="checkbox" data-col="brand" class="col-toggle text-blue-600 rounded">
+                  <span>Thương hiệu</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer hover:text-blue-600">
+                  <input type="checkbox" data-col="category" class="col-toggle text-blue-600 rounded">
+                  <span>Nhóm hàng</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer hover:text-blue-600">
+                  <input type="checkbox" data-col="price" checked class="col-toggle text-blue-600 rounded">
+                  <span>Giá bán</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer hover:text-blue-600">
+                  <input type="checkbox" data-col="cost" checked class="col-toggle text-blue-600 rounded">
+                  <span>Giá vốn</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer hover:text-blue-600">
+                  <input type="checkbox" data-col="stock" checked class="col-toggle text-blue-600 rounded">
+                  <span>Tồn kho</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer hover:text-blue-600">
+                  <input type="checkbox" data-col="orders" checked class="col-toggle text-blue-600 rounded">
+                  <span>Khách đặt</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer hover:text-blue-600">
+                  <input type="checkbox" data-col="date" checked class="col-toggle text-blue-600 rounded">
+                  <span>Thời gian tạo</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- 5. NÚT THIẾT LẬP [ ⚙ ] -->
+          <a
+            href="/admin/settings"
+            class="inline-flex items-center justify-center h-8 w-8 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-600 shadow-2xs transition cursor-pointer"
+            title="Thiết lập hàng hóa & kho"
+          >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+            </svg>
+          </a>
+        </div>
+      </div>
+
+      <!-- MATCHED UNIT BANNER (NẾU KHỚP SERIAL PROGRAM CODE) -->
+      {matchedUnit && (
+        <div class="p-3 bg-amber-50 border-b border-amber-200 flex items-center justify-between text-xs">
+          <div class="flex items-center gap-2">
+            <span class="rounded bg-amber-600 text-white font-mono font-bold px-2 py-0.5">
+              {matchedUnit.program_code}
+            </span>
+            <span class="text-amber-900">
+              Khớp Serial: <strong>{matchedUnit.product_name}</strong> • Tình trạng: <strong>{matchedUnit.condition === 'NEW' ? 'Mới' : 'QSD'}</strong> • Trạng thái: <strong>{matchedUnit.availability}</strong>
+            </span>
+          </div>
+          <a href={`/admin/units/lookup?code=${encodeURIComponent(matchedUnit.program_code)}`} class="font-bold text-amber-900 hover:underline">
+            Xem lý lịch 360° &rarr;
+          </a>
+        </div>
+      )}
+
+      <!-- BẢNG HÀNG HÓA CHUẨN KIOTVIET (FONT CHỮ APPLE SF PRO, CỠ CHỮ RÕ RÀNG, CHỮ THƯỜNG THANH THOÁT) -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-[14.5px] border-collapse">
+          <thead class="bg-[#f8f9fa] border-b border-gray-200 text-[14px] text-gray-700 select-none">
+            <!-- 1. DÒNG TIÊU ĐỀ CỘT -->
+            <tr class="font-semibold text-gray-800">
+              <th class="w-8 px-3.5 py-3 text-center">
+                <input type="checkbox" class="rounded border-gray-300" title="Chọn tất cả" />
+              </th>
+              <th class="w-10 px-1 py-3 text-center" data-col="img">Hình ảnh</th>
+              <th class="px-3.5 py-3" data-col="code">Mã hàng</th>
+              <th class="px-3.5 py-3" data-col="name">Tên hàng</th>
+              <th class="px-3.5 py-3 hidden" data-col="category">Nhóm hàng</th>
+              <th class="px-3.5 py-3 hidden" data-col="brand">Thương hiệu</th>
+              <th class="px-3.5 py-3 text-right" data-col="price">Giá bán</th>
+              <th class="px-3.5 py-3 text-right" data-col="cost">Giá vốn</th>
+              <th class="px-3.5 py-3 text-right font-semibold text-gray-900" data-col="stock">Tồn kho</th>
+              <th class="px-3.5 py-3 text-right" data-col="orders">Khách đặt</th>
+              <th class="px-3.5 py-3 text-center" data-col="date">Thời gian tạo</th>
+              <th class="px-3.5 py-3 text-center" data-col="actions">Thao tác</th>
+            </tr>
+
+            <!-- 2. DÒNG TỔNG KẾT THẲNG HÀNG CHUẨN KIOTVIET -->
+            <tr class="bg-gray-100/70 border-b border-gray-200 font-medium text-[14px] text-gray-800">
+              <td class="px-3.5 py-2.5"></td>
+              <td class="px-1 py-2.5" data-col="img"></td>
+              <td class="px-3.5 py-2.5 text-gray-500 font-normal" data-col="code">Tổng: {totalCount}</td>
+              <td class="px-3.5 py-2.5" data-col="name"></td>
+              <td class="px-3.5 py-2.5 hidden" data-col="category"></td>
+              <td class="px-3.5 py-2.5 hidden" data-col="brand"></td>
+              <td class="px-3.5 py-2.5 text-right" data-col="price"></td>
+              <td class="px-3.5 py-2.5 text-right" data-col="cost"></td>
+              <td class="px-3.5 py-2.5 text-right tabular-nums font-semibold text-[14.5px] text-gray-900" data-col="stock">
+                {formatNumber(pageStockTotal)}
+              </td>
+              <td class="px-3.5 py-2.5 text-right tabular-nums text-gray-700 font-normal" data-col="orders">0</td>
+              <td class="px-3.5 py-2.5 text-center text-gray-400 font-normal" data-col="date">---</td>
+              <td class="px-3.5 py-2.5 text-center text-gray-400 font-normal" data-col="actions">---</td>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">
+            {products.length === 0 ? (
+              <tr>
+                <td colspan="12" class="py-12 text-center text-gray-500">
+                  <div class="text-4xl mb-2">📦</div>
+                  <div class="text-sm font-semibold">Không tìm thấy hàng hóa nào phù hợp</div>
+                  <div class="text-xs text-gray-400 mt-1">Hãy thử đổi từ khóa hoặc đặt lại bộ lọc.</div>
+                </td>
+              </tr>
+            ) : (
+              products.map((p: any) => {
+                const types = typesByProduct[p.id] ?? [];
+                const totalStock = (p.stock_new ?? 0) + (p.stock_used ?? 0) || p.stock || 0;
+                const isSerialTracked = p.has_serial === 1 || p.tracking_mode === 'CODE';
+
+                return (
+                  <>
+                    <!-- DÒNG SẢN PHẨM CHÍNH (BẤM VÀO LÀ TRƯỢT XUỐNG XEM CHI TIẾT) -->
+                    <tr
+                      class="hover:bg-blue-50/40 transition cursor-pointer group"
+                      onclick={`window.toggleProductDetail(${p.id})`}
+                    >
+                      <!-- 1. Checkbox -->
+                      <td class="px-3.5 py-3 text-center" onclick="event.stopPropagation()">
+                        <input type="checkbox" class="rounded border-gray-300" />
+                      </td>
+
+                      <!-- 2. Ảnh Thumbnail -->
+                      <td class="px-1 py-2 text-center" data-col="img">
+                        <ProductImage
+                          imageKey={p.image_key}
+                          alt=""
+                          usage="thumbnail"
+                          class="h-8 w-8 rounded object-cover border border-gray-200 mx-auto shadow-2xs"
+                        />
+                      </td>
+
+                      <!-- 3. Mã hàng (CHỮ THƯỜNG, NÉT THANH APPLE) -->
+                      <td class="px-3.5 py-3 whitespace-nowrap text-[14px] text-gray-700" data-col="code">
+                        <a
+                          href={`/admin/products/${p.public_id}/edit`}
+                          class="hover:text-blue-600 hover:underline font-normal"
+                          onclick="event.stopPropagation()"
+                          title="Bấm để sửa hàng hóa"
+                        >
+                          {p.product_code || `SP${String(p.id).padStart(5, '0')}`}
+                        </a>
+                      </td>
+
+                      <!-- 4. Tên hàng hóa (CỠ CHỮ 14.5PX, RÕ RÀNG) -->
+                      <td class="px-3.5 py-3" data-col="name">
+                        <div class="text-[14.5px] font-normal text-gray-900 group-hover:text-blue-700 transition flex items-center gap-1.5">
+                          <span>{p.name}</span>
+                          {isSerialTracked && (
+                            <span class="rounded px-1.5 py-0.2 bg-purple-50 text-purple-700 border border-purple-200 text-[11px] font-medium">
+                              Serial
+                            </span>
+                          )}
+                        </div>
+                        <div class="text-[12.5px] text-gray-400 mt-0.5">
+                          {p.category_name || 'Chưa nhóm'} {p.brand_name ? `• ${p.brand_name}` : ''}
+                        </div>
+                      </td>
+
+                      <!-- Nhóm hàng (Ẩn mặc định) -->
+                      <td class="px-3.5 py-3 whitespace-nowrap text-gray-600 font-normal hidden" data-col="category">
+                        {p.category_name || '--'}
+                      </td>
+
+                      <!-- Thương hiệu (Ẩn mặc định) -->
+                      <td class="px-3.5 py-3 whitespace-nowrap text-gray-600 font-normal hidden" data-col="brand">
+                        {p.brand_name || p.brand || '--'}
+                      </td>
+
+                      <!-- 5. Giá bán -->
+                      <td class="px-3.5 py-3 text-right whitespace-nowrap" data-col="price">
+                        {p.price_cents > 0 && p.price_used_cents > 0 ? (
+                          <div class="text-right space-y-0.5">
+                            <div class="text-[13px] font-medium text-blue-700 tabular-nums">{formatNumber(p.price_cents)} <span class="text-[10px] text-gray-400 font-normal">Mới</span></div>
+                            <div class="text-[12.5px] font-medium text-amber-700 tabular-nums">{formatNumber(p.price_used_cents)} <span class="text-[10px] text-amber-600 font-normal">Cũ</span></div>
+                          </div>
+                        ) : p.price_used_cents > 0 && (!p.price_cents || p.price_cents === 0) ? (
+                          <div class="text-right">
+                            <span class="tabular-nums text-amber-700 text-[14.5px] font-medium">{formatNumber(p.price_used_cents)}</span>
+                            <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 ml-1">Cũ</span>
+                          </div>
+                        ) : (
+                          <span class="tabular-nums text-gray-800 text-[14.5px] font-normal">{p.price_cents > 0 ? formatNumber(p.price_cents) : '0'}</span>
+                        )}
+                      </td>
+
+                      <!-- 6. Giá vốn -->
+                      <td class="px-3.5 py-3 text-right whitespace-nowrap tabular-nums text-gray-500 text-[14.5px] font-normal" data-col="cost">
+                        {p.cost_price_cents > 0 && p.cost_price_used_cents > 0 ? (
+                          <div class="text-right space-y-0.5">
+                            <div class="text-[12.5px] tabular-nums">{formatNumber(p.cost_price_cents)}</div>
+                            <div class="text-[12px] text-gray-400 tabular-nums">{formatNumber(p.cost_price_used_cents)}</div>
+                          </div>
+                        ) : p.cost_price_used_cents > 0 && (!p.cost_price_cents || p.cost_price_cents === 0) ? (
+                          <span>{formatNumber(p.cost_price_used_cents)}</span>
+                        ) : (
+                          <span>{p.cost_price_cents > 0 ? formatNumber(p.cost_price_cents) : '0'}</span>
+                        )}
+                      </td>
+
+                      <!-- 7. TỒN KHO -->
+                      <td class="px-3.5 py-3 text-right whitespace-nowrap" data-col="stock">
+                        {p.stock_new > 0 && p.stock_used > 0 ? (
+                          <div class="text-right space-y-0.5">
+                            <div class="text-[13px] text-emerald-700 font-medium tabular-nums">{formatNumber(p.stock_new)} <span class="text-[10px] text-gray-400">Mới</span></div>
+                            <div class="text-[12.5px] text-amber-700 font-medium tabular-nums">{formatNumber(p.stock_used)} <span class="text-[10px] text-amber-600">Cũ</span></div>
+                          </div>
+                        ) : p.stock_used > 0 && (!p.stock_new || p.stock_new === 0) ? (
+                          <div>
+                            <span class="tabular-nums text-[14.5px] font-medium text-amber-700">{formatNumber(p.stock_used ?? totalStock)}</span>
+                            <span class="text-[10px] text-amber-700 font-semibold ml-0.5">Cũ</span>
+                          </div>
+                        ) : (
+                          <span class={`tabular-nums text-[14.5px] font-medium ${
+                            totalStock > 0 ? 'text-emerald-700 font-medium' : totalStock === 0 ? 'text-gray-400' : 'text-red-600 font-medium'
+                          }`}>
+                            {formatNumber(totalStock)}
+                          </span>
+                        )}
+                      </td>
+
+                      <!-- 8. Khách đặt -->
+                      <td class="px-3.5 py-3 text-right whitespace-nowrap tabular-nums text-gray-500 text-[14.5px] font-normal" data-col="orders">
+                        0
+                      </td>
+
+                      <!-- 9. Thời gian tạo -->
+                      <td class="px-3.5 py-3 text-center whitespace-nowrap text-[13px] text-gray-500 font-normal" data-col="date">
+                        {formatDateTime(p.created_at)}
+                      </td>
+
+                      <!-- 10. Thao tác & Trạng thái kinh doanh (Chuẩn KiotViet) -->
+                      <td class="px-3.5 py-3 text-center whitespace-nowrap" data-col="actions" onclick="event.stopPropagation()">
+                        <div class="flex items-center justify-center gap-1.5">
+                          <button
+                            type="button"
+                            onclick={`window.toggleProductActive(${p.id}, this)`}
+                            class={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition cursor-pointer ${
+                              p.active === 1 
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100' 
+                                : 'bg-gray-100 text-gray-500 border border-gray-200 hover:bg-gray-200'
+                            }`}
+                            title={p.active === 1 ? 'Đang kinh doanh. Bấm để ngưng' : 'Đã ngưng. Bấm để kinh doanh lại'}
+                          >
+                            {p.active === 1 ? 'Đang bán' : 'Đã ngừng'}
+                          </button>
+                          <button
+                            type="button"
+                            onclick={`window.deleteProductItem(${p.id}, '${(p.name || '').replace(/'/g, "\\'")}')`}
+                            class="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition cursor-pointer"
+                            title="Xóa hàng hóa"
+                          >
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+
+                    <!-- DÒNG TRƯỢT MỞ RỘNG (ACCORDION DETAIL ROW) -->
+                    <tr id={`detail-row-${p.id}`} class="hidden bg-gray-50/90 border-b border-gray-200">
+                      <td colspan="12" class="p-4">
+                        <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-2xs space-y-4">
+                          <!-- Phân tích thông tin giá & tồn kho chuẩn KiotViet -->
+                          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            {p.price_cents > 0 && p.price_used_cents > 0 ? (
+                              <>
+                                <!-- Khối Mới -->
+                                <div class="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
+                                  <div class="text-[11px] font-medium text-emerald-800 uppercase tracking-wider mb-1 flex items-center justify-between">
+                                    <span>Hàng Mới 100%</span>
+                                    <span class="tabular-nums text-sm font-bold text-emerald-700">{p.stock_new ?? 0}</span>
+                                  </div>
+                                  <div class="text-xs text-gray-700 space-y-0.5">
+                                    <div>Giá bán: <span class="tabular-nums font-bold text-emerald-700">{formatNumber(p.price_cents)}</span></div>
+                                    <div>Giá vốn: <span class="tabular-nums font-normal text-gray-600">{formatNumber(p.cost_price_cents)}</span></div>
+                                  </div>
+                                </div>
+
+                                <!-- Khối Cũ (QSD) -->
+                                <div class="rounded-lg border border-amber-200 bg-amber-50/50 p-3">
+                                  <div class="text-[11px] font-medium text-amber-800 uppercase tracking-wider mb-1 flex items-center justify-between">
+                                    <span>Hàng Cũ (QSD)</span>
+                                    <span class="tabular-nums text-sm font-bold text-amber-700">{p.stock_used ?? 0}</span>
+                                  </div>
+                                  <div class="text-xs text-gray-700 space-y-0.5">
+                                    <div>Giá bán: <span class="tabular-nums font-bold text-amber-700">{formatNumber(p.price_used_cents)}</span></div>
+                                    <div>Giá vốn: <span class="tabular-nums font-normal text-gray-600">{formatNumber(p.cost_price_used_cents || 0)}</span></div>
+                                  </div>
+                                </div>
+                              </>
+                            ) : p.price_used_cents > 0 || (p.stock_used > 0 && (!p.stock_new || p.stock_new === 0)) ? (
+                              <>
+                                <!-- Khối Hàng Cũ (QSD) -->
+                                <div class="rounded-lg border border-amber-200 bg-amber-50/50 p-3">
+                                  <div class="text-[11px] font-bold text-amber-900 uppercase tracking-wider mb-1 flex items-center justify-between">
+                                    <span>Hàng Cũ (QSD)</span>
+                                    <span class="text-[11px] font-semibold text-amber-700">{p.unit_name || 'Cái'}</span>
+                                  </div>
+                                  <div class="text-xs text-gray-700 space-y-1">
+                                    <div class="flex items-center justify-between">
+                                      <span class="text-gray-500">Giá bán:</span>
+                                      <span class="tabular-nums font-bold text-amber-700 text-sm">{formatNumber(p.price_used_cents || p.price_cents)}</span>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                      <span class="text-gray-500">Giá vốn:</span>
+                                      <span class="tabular-nums font-medium text-gray-700">{formatNumber(p.cost_price_used_cents || p.cost_price_cents)}</span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <!-- Khối Tồn kho Cũ -->
+                                <div class="rounded-lg border border-gray-200 bg-gray-50/70 p-3">
+                                  <div class="text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1 flex items-center justify-between">
+                                    <span>Tồn kho hiện tại</span>
+                                    <span class="tabular-nums text-sm font-bold text-amber-700">
+                                      {p.stock_used ?? totalStock} <span class="text-xs font-normal text-gray-500">{p.unit_name || 'Cái'}</span>
+                                    </span>
+                                  </div>
+                                  <div class="text-xs text-gray-600 space-y-1">
+                                    <div>Tình trạng: <strong class="text-amber-700">Toàn bộ là hàng Cũ / QSD</strong></div>
+                                    <div class="text-gray-400 italic">Hàng mới: Hết hàng / Chưa cài giá</div>
+                                  </div>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <!-- Khối Giá niêm yết Hàng Mới chuẩn -->
+                                <div class="rounded-lg border border-blue-200 bg-blue-50/40 p-3">
+                                  <div class="text-[11px] font-bold text-blue-900 uppercase tracking-wider mb-1 flex items-center justify-between">
+                                    <span>Hàng Mới (100%)</span>
+                                    <span class="text-[11px] font-semibold text-blue-600">{p.unit_name || 'Cái'}</span>
+                                  </div>
+                                  <div class="text-xs text-gray-700 space-y-1">
+                                    <div class="flex items-center justify-between">
+                                      <span class="text-gray-500">Giá bán:</span>
+                                      <span class="tabular-nums font-bold text-blue-700 text-sm">{formatNumber(p.price_cents)}</span>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                      <span class="text-gray-500">Giá vốn:</span>
+                                      <span class="tabular-nums font-medium text-gray-700">{formatNumber(p.cost_price_cents)}</span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <!-- Khối Tình trạng & Tồn kho Mới -->
+                                <div class="rounded-lg border border-gray-200 bg-gray-50/70 p-3">
+                                  <div class="text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1 flex items-center justify-between">
+                                    <span>Tồn kho hiện tại</span>
+                                    <span class="tabular-nums text-sm font-bold text-emerald-700">
+                                      {p.stock_new ?? totalStock} <span class="text-xs font-normal text-gray-500">{p.unit_name || 'Cái'}</span>
+                                    </span>
+                                  </div>
+                                  <div class="text-xs text-gray-600 space-y-1">
+                                    <div>Tình trạng: <strong class="text-emerald-700">Hàng mới 100%</strong></div>
+                                    {p.barcode && <div>Mã vạch: <span class="font-mono text-gray-800">{p.barcode}</span></div>}
+                                  </div>
+                                </div>
+                              </>
+                            )}
+
+                            <!-- Khối Thuộc tính bổ sung & Thao tác nhanh -->
+                            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 flex flex-col justify-between">
+                              <div class="text-xs text-gray-600 space-y-1">
+                                <div>Thương hiệu: <strong class="text-gray-900">{p.brand_name || p.brand || '--'}</strong></div>
+                                <div>Nhà cung cấp/NSX: <strong class="text-gray-900">{p.default_manufacturer || 'Nội bộ'}</strong></div>
+                                {p.warranty_period_months ? (
+                                  <div>Bảo hành: <strong class="text-blue-600">{p.warranty_period_months} tháng</strong></div>
+                                ) : null}
+                              </div>
+                              <div class="flex items-center gap-2 pt-2 border-t border-gray-200 mt-2">
+                                <button
+                                  type="button"
+                                  data-product={JSON.stringify(p)}
+                                  onclick="window.openEditProductModal(JSON.parse(this.dataset.product))"
+                                  class="rounded bg-blue-600 text-white px-2.5 py-1 text-[11px] font-bold hover:bg-blue-700 transition cursor-pointer"
+                                >
+                                  ✏️ Sửa chi tiết
+                                </button>
+                                <a
+                                  href={`/admin/purchases/new?product_id=${p.id}`}
+                                  class="rounded bg-[#0b4d9c] text-white px-2.5 py-1 text-[11px] font-bold hover:bg-[#083a77] transition"
+                                >
+                                  + Nhập thêm
+                                </a>
+                                <a
+                                  href={`/admin/inventory/outbound/new?product_id=${p.id}`}
+                                  class="rounded bg-rose-600 text-white px-2.5 py-1 text-[11px] font-bold hover:bg-rose-700 transition"
+                                >
+                                  Xuất nội bộ / Hủy
+                                </a>
+                              </div>
+                            </div>
+                          </div>
+
+                          <!-- Danh sách Serial / IMEI cụ thể (nếu có) -->
+                          {isSerialTracked && (
+                            <div class="border-t border-gray-100 pt-3">
+                              <div class="text-xs font-bold text-gray-800 uppercase tracking-wider mb-2 flex items-center justify-between">
+                                <span>Danh sách Serial / Program Codes đang có trong kho:</span>
+                                <a href="/admin/units/lookup" class="text-blue-600 text-[11px] font-semibold hover:underline">
+                                  Tra cứu toàn bộ &rarr;
+                                </a>
+                              </div>
+                              
+                              {types.length > 0 ? (
+                                <div class="space-y-2">
+                                  {types.map(t => {
+                                    const units = unitsByType[t.id] ?? [];
+                                    if (units.length === 0) return null;
+                                    return (
+                                      <div class="text-xs">
+                                        <div class="font-bold text-gray-600 mb-1">Phiên bản {t.name}:</div>
+                                        <div class="flex flex-wrap gap-1.5">
+                                          {units.map(u => (
+                                            <a
+                                              href={`/admin/units/lookup?code=${encodeURIComponent(u.program_code)}`}
+                                              class={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-mono text-xs font-semibold border ${
+                                                u.condition === 'NEW'
+                                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                                  : 'bg-amber-50 text-amber-800 border-amber-300'
+                                              } hover:shadow-xs transition`}
+                                            >
+                                              <span>{u.program_code}</span>
+                                              <span class="text-[9px] opacity-75">({u.condition === 'NEW' ? 'Mới' : 'QSD'})</span>
+                                            </a>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <div class="text-xs text-gray-500 italic">
+                                  Quản lý Serial kích hoạt khi nhập hàng hoặc thu mua.
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  </>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- PAGINATION -->
+      {totalPages > 1 && (
+        <div class="p-3 border-t border-gray-200 flex items-center justify-between text-xs bg-gray-50/50">
+          <div class="text-gray-500">
+            Trang <strong class="text-gray-800">{pageParam}</strong> / <strong>{totalPages}</strong>
+          </div>
+          <div class="flex items-center gap-1">
+            {pageParam > 1 && (
+              <a
+                href={`/admin/products?page=${pageParam - 1}${q ? `&q=${encodeURIComponent(q)}` : ''}${categoryParam ? `&category=${categoryParam}` : ''}${stockStatusParam ? `&stock_status=${stockStatusParam}` : ''}${conditionParam ? `&condition=${conditionParam}` : ''}`}
+                class="rounded border border-gray-300 px-2.5 py-1 text-gray-700 hover:bg-gray-100"
+              >
+                &larr; Trước
+              </a>
+            )}
+            {pageParam < totalPages && (
+              <a
+                href={`/admin/products?page=${pageParam + 1}${q ? `&q=${encodeURIComponent(q)}` : ''}${categoryParam ? `&category=${categoryParam}` : ''}${stockStatusParam ? `&stock_status=${stockStatusParam}` : ''}${conditionParam ? `&condition=${conditionParam}` : ''}`}
+                class="rounded border border-gray-300 px-2.5 py-1 text-gray-700 hover:bg-gray-100"
+              >
+                Sau &rarr;
+              </a>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  </div>
+
+  <!-- MODAL TẠO NHANH HÀNG HÓA -->
+  <QuickProductModal />
+
+  <!-- CLIENT-SIDE SCRIPT FOR COLLAPSE SIDEBAR & ACCORDION & CSV EXPORT -->
+  <script is:inline>
+    // Toggle Accordion Detail Row
+    window.toggleProductDetail = function(productId) {
+      const row = document.getElementById(`detail-row-${productId}`);
+      if (row) {
+        row.classList.toggle('hidden');
+      }
+    };
+
+    // Toggle Left Filter Sidebar
+    const sidebar = document.getElementById('filter-sidebar');
+    const btnToggle = document.getElementById('btn-toggle-sidebar');
+    const btnExpand = document.getElementById('btn-expand-sidebar');
+
+    if (btnToggle && sidebar && btnExpand) {
+      btnToggle.addEventListener('click', () => {
+        sidebar.classList.add('hidden');
+        btnExpand.classList.remove('hidden');
+        btnExpand.classList.add('flex');
+      });
+
+      btnExpand.addEventListener('click', () => {
+        sidebar.classList.remove('hidden');
+        btnExpand.classList.add('hidden');
+        btnExpand.classList.remove('flex');
+      });
+    }
+
+    // Tùy chỉnh cột hiển thị [ ☷ ]
+    const colMenuWrapper = document.getElementById('col-customizer-wrapper');
+    const btnToggleColMenu = document.getElementById('btn-toggle-col-menu');
+    const colMenuDropdown = document.getElementById('col-menu-dropdown');
+    const btnResetCols = document.getElementById('btn-reset-cols');
+
+    if (btnToggleColMenu && colMenuDropdown) {
+      btnToggleColMenu.addEventListener('click', (e) => {
+        e.stopPropagation();
+        colMenuDropdown.classList.toggle('hidden');
+      });
+
+      document.addEventListener('click', (e) => {
+        if (colMenuDropdown && !colMenuDropdown.contains(e.target) && !btnToggleColMenu.contains(e.target)) {
+          colMenuDropdown.classList.add('hidden');
+        }
+      });
+    }
+
+    const defaultCols = {
+      img: true,
+      code: true,
+      name: true,
+      category: false,
+      brand: false,
+      price: true,
+      cost: true,
+      stock: true,
+      orders: true,
+      date: true
+    };
+
+    function applyCols() {
+      let saved = {};
+      try {
+        saved = JSON.parse(localStorage.getItem('kgame_prod_cols') || '{}');
+      } catch (e) {}
+
+      const activeConfig = { ...defaultCols, ...saved };
+
+      document.querySelectorAll('.col-toggle').forEach(input => {
+        const key = input.dataset.col;
+        if (key && activeConfig[key] !== undefined) {
+          input.checked = activeConfig[key];
+        }
+      });
+
+      Object.entries(activeConfig).forEach(([key, isVisible]) => {
+        document.querySelectorAll(`[data-col="${key}"]`).forEach(el => {
+          if (isVisible) {
+            el.classList.remove('hidden');
+          } else {
+            el.classList.add('hidden');
+          }
+        });
+      });
+    }
+
+    document.querySelectorAll('.col-toggle').forEach(input => {
+      input.addEventListener('change', () => {
+        const key = input.dataset.col;
+        if (!key) return;
+        let saved = {};
+        try {
+          saved = JSON.parse(localStorage.getItem('kgame_prod_cols') || '{}');
+        } catch (e) {}
+        saved[key] = input.checked;
+        localStorage.setItem('kgame_prod_cols', JSON.stringify(saved));
+        applyCols();
+      });
+    });
+
+    if (btnResetCols) {
+      btnResetCols.addEventListener('click', () => {
+        localStorage.removeItem('kgame_prod_cols');
+        applyCols();
+      });
+    }
+
+    // Áp dụng cấu hình cột khi trang tải xong
+    applyCols();
+
+    // Export products to CSV
+    window.exportProductsToCsv = function() {
+      const rows = [];
+      const headers = ['Mã hàng', 'Tên hàng hóa', 'Giá bán', 'Giá vốn', 'Tồn kho', 'Thời gian tạo'];
+      rows.push(headers.join(','));
+
+      const tableRows = document.querySelectorAll('tbody tr:not([id^="detail-row"])');
+      tableRows.forEach(tr => {
+        const code = tr.querySelector('[data-col="code"]')?.innerText.trim() || '';
+        const name = tr.querySelector('[data-col="name"] span')?.innerText.trim() || '';
+        const price = tr.querySelector('[data-col="price"]')?.innerText.trim() || '0';
+        const cost = tr.querySelector('[data-col="cost"]')?.innerText.trim() || '0';
+        const stock = tr.querySelector('[data-col="stock"]')?.innerText.trim() || '0';
+        const date = tr.querySelector('[data-col="date"]')?.innerText.trim() || '';
+        rows.push([`"${code}"`, `"${name}"`, `"${price}"`, `"${cost}"`, `"${stock}"`, `"${date}"`].join(','));
+      });
+
+      const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + rows.join("\n");
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `kgame_danh_sach_hang_hoa_${new Date().toISOString().slice(0, 10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    };
+
+    // Bật/tắt trạng thái kinh doanh (Đang bán <-> Đã ngừng)
+    window.toggleProductActive = async function(id, btn) {
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/admin/products', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'toggle_active', product_id: id })
+        });
+        const data = await res.json();
+        if (data.success) {
+          if (data.active) {
+            btn.className = 'px-2.5 py-1 rounded-full text-[11px] font-semibold transition cursor-pointer bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100';
+            btn.innerText = 'Đang bán';
+            btn.title = 'Đang kinh doanh. Bấm để ngưng';
+          } else {
+            btn.className = 'px-2.5 py-1 rounded-full text-[11px] font-semibold transition cursor-pointer bg-gray-100 text-gray-500 border border-gray-200 hover:bg-gray-200';
+            btn.innerText = 'Đã ngừng';
+            btn.title = 'Đã ngưng. Bấm để kinh doanh lại';
+          }
+        } else {
+          alert('Lỗi: ' + (data.error || 'Không thể cập nhật'));
+        }
+      } catch (e) {
+        alert('Lỗi kết nối: ' + e.message);
+      } finally {
+        btn.disabled = false;
+      }
+    };
+
+    // Xóa hàng hóa an toàn
+    window.deleteProductItem = async function(id, name) {
+      if (!confirm(`Bạn có chắc chắn muốn xóa hàng hóa "${name}"?\n(Lưu ý: Nếu hàng hóa đã từng phát sinh đơn hàng, xuất nhập kho hoặc bảo hành, hệ thống sẽ yêu cầu ngưng kinh doanh thay vì xóa).`)) {
+        return;
+      }
+      try {
+        const res = await fetch('/api/admin/products', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'delete', product_id: id })
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert(`Đã xóa hàng hóa "${name}" thành công!`);
+          window.location.reload();
+        } else {
+          alert('Không thể xóa: ' + data.error);
+        }
+      } catch (e) {
+        alert('Lỗi kết nối: ' + e.message);
+      }
+    };
+
+    // Tự động tải lại trang khi tạo hàng hóa mới thành công từ modal
+    window.addEventListener('product-created', () => {
+      window.location.reload();
+    });
+  </script>
+</AdminLayout>

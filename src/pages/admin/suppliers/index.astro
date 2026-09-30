@@ -1,0 +1,5 @@
+---
+// Chuyển hướng sang danh mục Nhà Cung Cấp trên giao diện Đối Tác Hợp Nhất
+export const prerender = false;
+return Astro.redirect('/admin/customers?type=SUPPLIER', 302);
+---

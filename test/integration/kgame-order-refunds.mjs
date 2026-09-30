@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict';
+import { Miniflare } from 'miniflare';
+import { applyKgameMigrations } from './kgame-migrations.mjs';
+import { createPosOrder, addPosOrderPayment, updatePosOrderStatus } from '../../src/features/kgame/db.ts';
+import { settleOrderRefund } from '../../src/features/kgame/orderRefunds.ts';
+const mf=new Miniflare({modules:true,script:'export default {fetch(){return new Response("ok")}}',compatibilityDate:'2026-07-20',d1Databases:['DB']});
+try {
+ const db=await mf.getD1Database('DB');await applyKgameMigrations(db);
+ await db.prepare("INSERT INTO partners(id,partner_code,name,is_customer) VALUES(900,'OR900','Test refund',1)").run();
+ const pid=(await db.prepare("INSERT INTO products(name,slug,price_cents,currency,stock,stock_new,stock_used,tracking_mode,has_serial,cost_price_cents) VALUES('Refund test','refund-test',1000,'vnd',10,10,0,'QUANTITY',0,400)").run()).meta.last_row_id;
+ const fixture=async(paid=600,type='PREORDER')=>createPosOrder(db,{request_id:crypto.randomUUID(),customer_id:900,order_type:type,items:[{product_id:pid,condition:'NEW',quantity:1,unit_price_cents:1000}],payment:{amount_paid_cents:paid,payment_method:'CASH'},shipment:{carrier:'PICKUP'}});
+ const cancel=id=>updatePosOrderStatus(db,id,'CANCELLED',{refund_mode:'PENDING',require_unfulfilled:true});
+ const f=await fixture();await cancel(f.id);await cancel(f.id);
+ const obligation=await db.prepare("SELECT * FROM kgame_refund_obligations WHERE source_type='ORDER' AND source_id=?").bind(f.id).first();assert.equal(obligation.amount_cents,600);
+ assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM customer_credit_entries').first()).n,0);
+ const pay=(amount,key=crypto.randomUUID())=>({obligation_id:obligation.id,amount_cents:amount,account_type:'CASH',confirmed:true,request_id:key});
+ const key=crypto.randomUUID();await settleOrderRefund(db,pay(100,key));await settleOrderRefund(db,pay(100,key));
+ await assert.rejects(settleOrderRefund(db,pay(101,key)),/nội dung khác/);
+ assert.equal((await db.prepare('SELECT refunded_cents,paid_amount_cents FROM orders WHERE id=?').bind(f.id).first()).refunded_cents,100);
+ await assert.rejects(settleOrderRefund(db,{...pay(1),confirmed:false}));await assert.rejects(settleOrderRefund(db,pay(501)));
+ const race=await Promise.allSettled([settleOrderRefund(db,pay(500)),settleOrderRefund(db,pay(500))]);assert.equal(race.filter(r=>r.status==='fulfilled').length,1);
+ assert.equal((await db.prepare("SELECT SUM(CASE WHEN flow_type='IN' THEN amount_cents ELSE -amount_cents END) AS n FROM cash_transactions WHERE UPPER(reference_type)='ORDER' AND reference_id=?").bind(f.id).first()).n,0);
+ console.log('✓ O01: cancellation preserves cash, creates pending refund once, partial/retry/concurrent payments cannot over-refund');
+ const mixed=await fixture(300);
+ await db.prepare("INSERT INTO customer_credit_entries(entry_code,partner_id,amount_cents,reference_type,reference_id,operation_key) VALUES('TEST-SEED',900,200,'TEST',0,'test-credit-seed')").run();
+ await addPosOrderPayment(db,{order_id:mixed.id,amount_paid_cents:200,payment_method:'CREDIT',request_id:crypto.randomUUID()});await cancel(mixed.id);
+ assert.equal((await db.prepare('SELECT amount_cents FROM kgame_refund_obligations WHERE source_id=? AND source_type=\'ORDER\'').bind(mixed.id).first()).amount_cents,300);
+ assert.equal((await db.prepare('SELECT SUM(amount_cents) AS n FROM customer_credit_entries WHERE partner_id=900').first()).n,200);
+ console.log('✓ O02: mixed payment restores only original credit; cash obligation contains only actual cash');
+ const done=await fixture(1000,'ORDER');await assert.rejects(cancel(done.id),/phiếu trả hàng/);
+ const late=await fixture();await db.prepare("CREATE TRIGGER fail_order_cancel BEFORE UPDATE ON orders WHEN NEW.order_status='CANCELLED' BEGIN SELECT RAISE(ABORT,'late cancellation'); END").run();await assert.rejects(cancel(late.id));
+ assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM kgame_refund_obligations WHERE source_type='ORDER' AND source_id=?").bind(late.id).first()).n,0);await db.prepare('DROP TRIGGER fail_order_cancel').run();
+ await db.prepare("CREATE TRIGGER fail_order_refund BEFORE INSERT ON kgame_refund_settlements BEGIN SELECT RAISE(ABORT,'late refund'); END").run();
+ const m=await db.prepare("SELECT id FROM kgame_refund_obligations WHERE source_type='ORDER' AND source_id=?").bind(mixed.id).first();await assert.rejects(settleOrderRefund(db,{...pay(100),obligation_id:m.id}));
+ assert.equal((await db.prepare('SELECT settled_cents FROM kgame_refund_obligations WHERE id=?').bind(m.id).first()).settled_cents,0);
+ assert.equal((await db.prepare('SELECT refunded_cents FROM orders WHERE id=?').bind(mixed.id).first()).refunded_cents,0);
+ console.log('✓ O03: delivered sale refused; late cancellation/refund failures roll back financial changes');
+} finally {await mf.dispose();}

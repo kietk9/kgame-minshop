@@ -1,0 +1,249 @@
+---
+interface Props {
+  actionUrl: string;
+  activeView?: 'chart' | 'table';
+  showViewToggle?: boolean;
+  preset?: string;
+  startDate?: string;
+  endDate?: string;
+  dateLabel?: string;
+}
+
+const {
+  actionUrl,
+  activeView = 'chart',
+  showViewToggle = true,
+  preset = 'this_month',
+  startDate = '',
+  endDate = '',
+  dateLabel = 'Tháng này',
+} = Astro.props;
+
+const timePresets = [
+  { group: 'Theo ngày', items: [{ id: 'today', label: 'Hôm nay' }, { id: 'yesterday', label: 'Hôm qua' }] },
+  { group: 'Theo tuần', items: [{ id: 'this_week', label: 'Tuần này' }, { id: 'last_week', label: 'Tuần trước' }, { id: 'last_7_days', label: '7 ngày qua' }] },
+  { group: 'Theo tháng', items: [{ id: 'this_month', label: 'Tháng này' }, { id: 'last_month', label: 'Tháng trước' }, { id: 'last_30_days', label: '30 ngày qua' }] },
+  { group: 'Theo năm', items: [{ id: 'this_year', label: 'Năm nay' }, { id: 'last_year', label: 'Năm trước' }] },
+];
+---
+
+<aside
+  id="report-filter-sidebar"
+  class="w-full lg:w-64 xl:w-72 shrink-0 bg-white rounded-xl border border-gray-200 p-4 shadow-xs text-gray-800 transition-all duration-200"
+>
+  <div class="flex items-center justify-between pb-3 border-b border-gray-100 mb-4">
+    <h2 class="font-bold text-sm text-gray-900 uppercase tracking-wider flex items-center gap-1.5">
+      <svg class="h-4 w-4 text-[#0b4d9c]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+      </svg>
+      Bộ lọc
+    </h2>
+    <button
+      type="button"
+      id="btn-toggle-report-sidebar"
+      title="Thu gọn / Mở rộng"
+      class="hidden lg:flex h-6 w-6 items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 transition"
+    >
+      <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+      </svg>
+    </button>
+  </div>
+
+  <form method="get" action={actionUrl} id="report-filter-form" class="space-y-4 text-[13.5px]">
+    <!-- 1. KIỂU HIỂN THỊ (BIỂU ĐỒ / BÁO CÁO) -->
+    {showViewToggle && (
+      <div>
+        <label class="block text-[12px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">
+          Kiểu hiển thị
+        </label>
+        <div class="grid grid-cols-2 gap-1.5 p-1 bg-gray-100 rounded-lg border border-gray-200/80">
+          <button
+            type="submit"
+            name="view"
+            value="chart"
+            class={`py-1.5 text-center text-xs font-semibold rounded-md transition ${
+              activeView === 'chart'
+                ? 'bg-[#00a2ff] text-white shadow-xs'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-white/60'
+            }`}
+          >
+            Biểu đồ
+          </button>
+          <button
+            type="submit"
+            name="view"
+            value="table"
+            class={`py-1.5 text-center text-xs font-semibold rounded-md transition ${
+              activeView === 'table'
+                ? 'bg-[#00a2ff] text-white shadow-xs'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-white/60'
+            }`}
+          >
+            Báo cáo
+          </button>
+        </div>
+      </div>
+    )}
+
+    {/* Giữ lại view hiện tại nếu form submit các bộ lọc khác */}
+    <input type="hidden" name="view" value={activeView} />
+
+    <!-- 2. THỜI GIAN (QUICK DATE SELECTOR DROPDOWN) -->
+    <div class="relative">
+      <label class="block text-[12px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">
+        Thời gian
+      </label>
+      
+      <button
+        type="button"
+        id="btn-date-picker-toggle"
+        class="w-full flex items-center justify-between px-3 py-2 bg-white border border-gray-300 rounded-lg text-[13.5px] text-gray-800 hover:border-[#00a2ff] focus:outline-none focus:ring-1 focus:ring-[#00a2ff] transition"
+      >
+        <span class="font-medium text-gray-900 truncate" id="current-date-label">
+          {dateLabel}
+        </span>
+        <svg class="h-4 w-4 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+
+      <!-- Popup chọn thời gian nhanh chuẩn KiotViet -->
+      <div
+        id="date-picker-dropdown"
+        class="hidden absolute left-0 right-0 top-full mt-1 z-40 bg-white border border-gray-200 rounded-xl shadow-xl p-3 text-xs text-gray-700 w-[270px] space-y-3"
+      >
+        {timePresets.map(group => (
+          <div>
+            <div class="font-semibold text-gray-400 text-[11px] uppercase tracking-wider mb-1">
+              {group.group}
+            </div>
+            <div class="flex flex-wrap gap-1">
+              {group.items.map(item => (
+                <button
+                  type="button"
+                  data-preset={item.id}
+                  class={`px-2.5 py-1 rounded-md border text-[12px] transition ${
+                    preset === item.id
+                      ? 'bg-[#00a2ff] border-[#00a2ff] text-white font-medium'
+                      : 'border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-700'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+
+        <div class="pt-2 border-t border-gray-100">
+          <div class="font-semibold text-gray-400 text-[11px] uppercase tracking-wider mb-1.5">
+            Tùy chỉnh khoảng ngày
+          </div>
+          <div class="grid grid-cols-2 gap-1.5 mb-2">
+            <div>
+              <span class="text-[10.5px] text-gray-500">Từ ngày:</span>
+              <input
+                type="date"
+                id="input-from-date"
+                name="from"
+                value={startDate}
+                class="w-full mt-0.5 px-2 py-1 border border-gray-300 rounded text-[11.5px] text-gray-800"
+              />
+            </div>
+            <div>
+              <span class="text-[10.5px] text-gray-500">Đến ngày:</span>
+              <input
+                type="date"
+                id="input-to-date"
+                name="to"
+                value={endDate}
+                class="w-full mt-0.5 px-2 py-1 border border-gray-300 rounded text-[11.5px] text-gray-800"
+              />
+            </div>
+          </div>
+          <button
+            type="submit"
+            class="w-full py-1.5 bg-[#0b4d9c] hover:bg-[#083a77] text-white font-medium rounded-md text-center transition"
+          >
+            Áp dụng khoảng ngày
+          </button>
+        </div>
+      </div>
+
+      <input type="hidden" name="preset" id="hidden-preset-input" value={preset} />
+    </div>
+
+    <!-- 3. SLOTS FOR PAGE-SPECIFIC FILTERS -->
+    <slot />
+
+    <!-- NÚT ĐẶT LẠI BỘ LỌC (NẾU ĐANG CÓ LỌC) -->
+    <div class="pt-2 border-t border-gray-100">
+      <a
+        href={actionUrl}
+        class="flex items-center justify-center gap-1.5 w-full rounded-lg border border-gray-200 bg-gray-50 py-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 text-[12.5px] font-medium transition"
+        title="Đặt lại bộ lọc về mặc định"
+      >
+        <span>🔄</span> Đặt lại bộ lọc (Mặc định)
+      </a>
+    </div>
+  </form>
+</aside>
+
+<script>
+  // Toggle Date Dropdown
+  const btnToggle = document.getElementById('btn-date-picker-toggle');
+  const dropdown = document.getElementById('date-picker-dropdown');
+  const hiddenPreset = document.getElementById('hidden-preset-input') as HTMLInputElement | null;
+  const form = document.getElementById('report-filter-form') as HTMLFormElement | null;
+
+  if (btnToggle && dropdown) {
+    btnToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdown.classList.toggle('hidden');
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!dropdown.contains(e.target as Node) && e.target !== btnToggle) {
+        dropdown.classList.add('hidden');
+      }
+    });
+  }
+
+  // Handle Preset Click - TỰ ĐỘNG CHẠY NGAY KHI CHỌN
+  const presetButtons = document.querySelectorAll('button[data-preset]');
+  presetButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const p = btn.getAttribute('data-preset');
+      if (hiddenPreset && form && p) {
+        hiddenPreset.value = p;
+        // Xóa from & to custom để apply preset
+        const fromInput = document.getElementById('input-from-date') as HTMLInputElement | null;
+        const toInput = document.getElementById('input-to-date') as HTMLInputElement | null;
+        if (fromInput) fromInput.value = '';
+        if (toInput) toInput.value = '';
+        form.submit();
+      }
+    });
+  });
+
+  // TỰ ĐỘNG LỌC NGAY KHI THAY ĐỔI SELECT HOẶC CHECKBOX
+  if (form) {
+    const instantInputs = form.querySelectorAll('select, input[type="checkbox"], input[type="radio"]');
+    instantInputs.forEach((el) => {
+      el.addEventListener('change', () => {
+        form.submit();
+      });
+    });
+  }
+
+  // Toggle Sidebar Collapse
+  const btnToggleSidebar = document.getElementById('btn-toggle-report-sidebar');
+  const sidebar = document.getElementById('report-filter-sidebar');
+  if (btnToggleSidebar && sidebar) {
+    btnToggleSidebar.addEventListener('click', () => {
+      sidebar.classList.toggle('lg:w-16');
+      sidebar.classList.toggle('overflow-hidden');
+    });
+  }
+</script>

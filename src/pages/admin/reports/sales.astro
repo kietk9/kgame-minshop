@@ -1,0 +1,796 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import ReportSidebar from '../../../components/admin/ReportSidebar.astro';
+import { getPosSalesGroups } from '../../../features/reports/financial.ts';
+import { parseDatePreset } from '../../../features/reports/date-utils';
+
+if (!Astro.locals.settings?.setupComplete) return Astro.redirect('/admin/setup', 302);
+
+const url = new URL(Astro.request.url);
+const view = url.searchParams.get('view') || 'chart';
+const preset = url.searchParams.get('preset') || 'this_week';
+const customFrom = url.searchParams.get('from');
+const customTo = url.searchParams.get('to');
+const metric = url.searchParams.get('metric') || 'time'; // 'time' (Bán hàng), 'profit' (Lợi nhuận), 'staff' (Nhân viên)
+const seller = url.searchParams.get('seller') || '';
+const carrier = url.searchParams.get('carrier') || '';
+
+const vietnamToday = new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+const dateRange = parseDatePreset(preset, customFrom, customTo, new Date(vietnamToday+'T12:00:00'));
+
+// Lấy danh sách người bán / nhân viên có trong hệ thống
+const { results: sellersList } = await env.DB.prepare(`
+  SELECT DISTINCT COALESCE(created_by, 'Admin Kgame') as seller_name
+  FROM orders
+  WHERE created_by IS NOT NULL AND created_by != ''
+  ORDER BY seller_name ASC
+`).all<{ seller_name: string }>();
+
+const sellers = (sellersList ?? []).map(s => s.seller_name);
+if (!sellers.includes('Admin Kgame')) sellers.unshift('Admin Kgame');
+
+// Xây dựng câu truy vấn theo Mối quan tâm
+let whereClause = `
+  WHERE DATE(o.created_at,'+7 hours') >= ? AND DATE(o.created_at,'+7 hours') <= ?
+    AND o.order_status != 'CANCELLED' AND (o.order_type='ORDER' OR (o.order_type='PREORDER' AND o.order_status='COMPLETED'))
+`;
+const params: any[] = [dateRange.startDate, dateRange.endDate];
+
+if (seller) {
+  whereClause += ` AND COALESCE(o.created_by, 'Admin Kgame') = ?`;
+  params.push(seller);
+}
+
+if (carrier) {
+  whereClause += ` AND EXISTS(SELECT 1 FROM shipments s WHERE s.order_id=o.id AND s.carrier=?)`;
+  params.push(carrier);
+}
+
+const groups = await getPosSalesGroups(env.DB,dateRange.startDate,dateRange.endDate,seller,carrier);
+const timeData = groups.daily.map(d => ({...d,revenue:d.net_revenue,profit:d.net_revenue-d.cogs}));
+const staffData = groups.staff.map(s => ({...s,name:s.staff_name,revenue:s.net_revenue,profit:s.net_revenue-s.cogs}));
+const incomplete = timeData.some(d => d.incomplete > 0);
+
+// 3. Lấy danh sách đơn hàng chi tiết trong kỳ để hỗ trợ Drilldown
+const { results: rawDetailedOrders } = await env.DB.prepare(`
+  SELECT 
+    o.id,
+    o.order_code,
+    DATE(o.created_at,'+7 hours') as day,
+    o.created_at,
+    o.amount_total_cents,
+    o.paid_amount_cents,
+    o.payment_method,
+    o.order_status,
+    COALESCE(o.created_by, 'Admin Kgame') as staff_name,
+    c.name as customer_name,
+    c.phone as customer_phone,
+    (
+      SELECT GROUP_CONCAT(ol.product_name_snapshot || ' (x' || ol.quantity || ')', '; ')
+      FROM order_lines ol
+      WHERE ol.order_id = o.id
+    ) as items_summary
+  FROM orders o
+  LEFT JOIN partners c ON o.customer_id = c.id
+  ${whereClause}
+  ORDER BY o.created_at DESC
+`).bind(...params).all<any>();
+
+const detailedOrders = rawDetailedOrders ?? [];
+
+// Tổng kết toàn kỳ
+const totalOrders = timeData.reduce((s, d) => s + d.order_count, 0);
+const totalGross = timeData.reduce((s, d) => s + d.gross_revenue, 0);
+const totalDiscount = timeData.reduce((s, d) => s + d.total_discount, 0);
+const totalRevenue = timeData.reduce((s, d) => s + d.revenue, 0);
+const totalCogs = timeData.reduce((s, d) => s + d.cogs, 0);
+const totalProfit = timeData.reduce((s, d) => s + d.profit, 0);
+
+const maxRevenue = Math.max(1, ...(timeData.map(d => d.revenue)));
+const maxTriValue = Math.max(1, ...(timeData.flatMap(d => [d.revenue, d.cogs, Math.abs(d.profit)])));
+
+function getNiceTicks(maxVal: number, count: number = 5) {
+  if (maxVal <= 0) maxVal = 10;
+  const roughStep = maxVal / count;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(roughStep)) || 0) || 1;
+  const normalized = roughStep / magnitude;
+  let niceStep = 1;
+  if (normalized > 5) niceStep = 10;
+  else if (normalized > 2) niceStep = 5;
+  else if (normalized > 1) niceStep = 2;
+  
+  const step = Math.max(1, niceStep * magnitude);
+  const maxTick = Math.max(step * count, Math.ceil(maxVal / step) * step);
+  const ticks: number[] = [];
+  for (let v = 0; v <= maxTick + (step * 0.01); v += step) {
+    ticks.push(Math.round(v));
+  }
+  return { maxTick, ticks };
+}
+
+function formatAxisTick(val: number) {
+  if (val === 0) return '0';
+  if (val >= 1_000_000_000) {
+    const num = val / 1_000_000_000;
+    return `${Number.isInteger(num) ? num : num.toFixed(1)} tỷ`;
+  }
+  if (val >= 1_000_000) {
+    const num = val / 1_000_000;
+    return `${Number.isInteger(num) ? num : num.toFixed(1)} tr`;
+  }
+  if (val >= 1_000) {
+    const num = val / 1_000;
+    return `${Number.isInteger(num) ? num : num.toFixed(1)} k`;
+  }
+  return String(val);
+}
+
+const revenueYTicks = getNiceTicks(maxRevenue, 5);
+const triYTicks = getNiceTicks(maxTriValue, 5);
+
+function formatNum(cents: number) {
+  if (!cents || isNaN(cents)) return '0';
+  return new Intl.NumberFormat('en-US').format(cents);
+}
+
+const nowStr = new Date().toLocaleString('vi-VN', {
+  timeZone: 'Asia/Ho_Chi_Minh',
+  day: '2-digit', month: '2-digit', year: 'numeric',
+  hour: '2-digit', minute: '2-digit'
+});
+---
+
+<AdminLayout title="Báo cáo bán hàng" active="reports-sales">
+  <div class="flex flex-col lg:flex-row gap-4 items-start relative">
+    <!-- CỘT TRÁI: BỘ LỌC ĐỒNG BỘ CHUẨN KIOTVIET -->
+    <ReportSidebar
+      actionUrl="/admin/reports/sales"
+      activeView={view as any}
+      showViewToggle={true}
+      preset={preset}
+      startDate={dateRange.startDate}
+      endDate={dateRange.endDate}
+      dateLabel={dateRange.label}
+    >
+      <!-- 1. MỐI QUAN TÂM (TỰ ĐỘNG CHUYỂN DỮ LIỆU BÁO CÁO & BIỂU ĐỒ) -->
+      <div>
+        <label class="block text-[12px] font-bold text-gray-500 uppercase tracking-wider mb-1">
+          Mối quan tâm
+        </label>
+        <select
+          name="metric"
+          class="w-full h-[34px] px-2.5 bg-white border border-gray-300 rounded-lg text-[13.5px] text-gray-800 focus:border-[#00a2ff] focus:outline-none"
+        >
+          <option value="time" selected={metric === 'time'}>Thời gian (Doanh thu thuần)</option>
+          <option value="profit" selected={metric === 'profit'}>Lợi nhuận (Doanh thu / Vốn / Lãi)</option>
+          <option value="staff" selected={metric === 'staff'}>Nhân viên (Người bán hàng)</option>
+        </select>
+      </div>
+
+      <!-- 2. NGƯỜI BÁN / NHÂN VIÊN BÁN HÀNG -->
+      <div>
+        <label class="block text-[12px] font-bold text-gray-500 uppercase tracking-wider mb-1">
+          Người bán
+        </label>
+        <select
+          name="seller"
+          class="w-full h-[34px] px-2.5 bg-white border border-gray-300 rounded-lg text-[13.5px] text-gray-800 focus:border-[#00a2ff] focus:outline-none"
+        >
+          <option value="">-- Tất cả người bán --</option>
+          {sellers.map(s => (
+            <option value={s} selected={seller === s}>{s}</option>
+          ))}
+        </select>
+      </div>
+
+      <!-- 3. PHƯƠNG THỨC / KÊNH BÁN -->
+      <div>
+        <label class="block text-[12px] font-bold text-gray-500 uppercase tracking-wider mb-1">
+          Phương thức bán hàng
+        </label>
+        <select
+          name="carrier"
+          class="w-full h-[34px] px-2.5 bg-white border border-gray-300 rounded-lg text-[13.5px] text-gray-800 focus:border-[#00a2ff] focus:outline-none"
+        >
+          <option value="">-- Tất cả phương thức --</option>
+          <option value="PICKUP" selected={carrier === 'PICKUP'}>Tại xưởng Kgame</option>
+          <option value="BUS" selected={carrier === 'BUS'}>Gửi chành xe / Xe khách</option>
+          <option value="GHN" selected={carrier === 'GHN'}>Chuyển phát nhanh GHN</option>
+        </select>
+      </div>
+    </ReportSidebar>
+
+    <!-- KHU VỰC NỘI DUNG CHÍNH -->
+    <main class="flex-1 w-full bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+      <!-- HEADER BÁO CÁO -->
+      <div class="p-5 border-b border-gray-100 bg-white">
+        <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
+          <span>Ngày lập: {nowStr}</span>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              onclick="window.print()"
+              class="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-md text-xs transition"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+              </svg>
+              In báo cáo
+            </button>
+          </div>
+        </div>
+
+        <div class="text-center py-2">
+          <h1 class="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">
+            {metric === 'profit' ? 'Báo cáo lợi nhuận bán hàng' : metric === 'staff' ? 'Báo cáo bán hàng theo nhân viên' : 'Báo cáo doanh thu bán hàng'}
+          </h1>
+          <p class="text-[13.5px] text-gray-600 mt-1">
+            Từ ngày <strong class="text-gray-900">{dateRange.startDate}</strong> đến ngày <strong class="text-gray-900">{dateRange.endDate}</strong>
+          </p>
+          {seller && <p class="text-xs text-blue-600 mt-0.5 font-medium">Người bán: {seller}</p>}
+        </div>
+
+        <p class="my-3 text-sm text-amber-800">Phạm vi POS, giờ Việt Nam; giảm trừ gồm chiết khấu và tiền hoàn của các đơn trong kỳ. Lợi nhuận gộp tạm tính, chưa đối chiếu đầy đủ khách trả hàng và đơn web.</p>
+        {incomplete && <p role="alert" class="text-red-700">Có đơn thiếu giá vốn/dòng hàng hoặc hàng trả chờ kiểm tra. Chưa đủ dữ liệu tính lợi nhuận.</p>}
+        <!-- 4 THẺ TỔNG KẾT TÀI CHÍNH -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-gray-100 text-center">
+          <div class="p-3 bg-blue-50/50 rounded-lg border border-blue-100">
+            <span class="text-[11.5px] font-bold uppercase tracking-wider text-blue-600">Số đơn bán</span>
+            <p class="text-xl font-bold text-blue-900 mt-1 tabular-nums">{totalOrders}</p>
+          </div>
+          <div class="p-3 bg-emerald-50/50 rounded-lg border border-emerald-100">
+            <span class="text-[11.5px] font-bold uppercase tracking-wider text-emerald-600">Doanh thu thuần</span>
+            <p class="text-xl font-bold text-emerald-900 mt-1 tabular-nums">{formatNum(totalRevenue)}</p>
+          </div>
+          <div class="p-3 bg-amber-50/50 rounded-lg border border-amber-100">
+            <span class="text-[11.5px] font-bold uppercase tracking-wider text-amber-600">Giá vốn hàng bán</span>
+            <p class="text-xl font-bold text-amber-900 mt-1 tabular-nums">{incomplete ? 'Chưa đủ dữ liệu' : formatNum(totalCogs) }</p>
+          </div>
+          <div class="p-3 bg-indigo-50/50 rounded-lg border border-indigo-100">
+            <span class="text-[11.5px] font-bold uppercase tracking-wider text-indigo-600">Lợi nhuận gộp</span>
+            <p class="text-xl font-bold text-indigo-900 mt-1 tabular-nums">{incomplete ? 'Chưa đủ dữ liệu' : formatNum(totalProfit) }</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- PHẦN 1: CHẾ ĐỘ BIỂU ĐỒ (CHART VIEW) -->
+      {view === 'chart' && (
+        <div class="p-6">
+          <!-- BIỂU ĐỒ TRƯỜNG HỢP 1: MỐI QUAN TÂM = THỜI GIAN (ẢNH 1: DOANH THU THUẦN CỘT XANH DƯƠNG ĐƠN) -->
+          {metric === 'time' && (
+            <div>
+              <h2 class="text-center text-sm font-semibold text-gray-700 mb-6 uppercase tracking-wide">
+                Doanh thu thuần {dateRange.label.toLowerCase()}
+              </h2>
+
+              {timeData.length > 0 ? (
+                <div class="max-w-4xl mx-auto">
+                  <div class="flex">
+                    <!-- Trục tung (Y-Axis) -->
+                    <div class="w-14 sm:w-16 shrink-0 relative h-64 text-right pr-2 text-[11px] text-gray-500 tabular-nums">
+                      {revenueYTicks.ticks.slice().reverse().map((t, idx) => {
+                        const topPct = (idx / (revenueYTicks.ticks.length - 1)) * 100;
+                        return (
+                          <div class="absolute right-2 -translate-y-1/2 select-none" style={`top: ${topPct}%`}>
+                            {formatAxisTick(t)}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <!-- Vùng vẽ có lưới ngang và trục đáy -->
+                    <div class="flex-1 relative h-64" style="border-left: 1px solid #9ca3af; border-bottom: 1px solid #9ca3af;">
+                      <!-- Các đường lưới ngang -->
+                      {revenueYTicks.ticks.map((t) => {
+                        const bottomPct = (t / revenueYTicks.maxTick) * 100;
+                        return (
+                          <div
+                            class="absolute left-0 right-0 pointer-events-none"
+                            style={`bottom: ${bottomPct}%; border-bottom: 1px solid #e5e7eb;`}
+                          ></div>
+                        );
+                      })}
+
+                      <!-- Các cột doanh thu đơn phẳng -->
+                      <div class="absolute inset-0 flex items-end justify-around px-4">
+                        {timeData.map(d => {
+                          const h = Math.max(1, Math.round((d.revenue / revenueYTicks.maxTick) * 100));
+                          return (
+                            <div class="flex flex-col items-center group relative h-full justify-end flex-1 max-w-[60px]">
+                              <div
+                                class="w-7 sm:w-9 hover:brightness-95 transition-all cursor-pointer relative"
+                                style={`height: ${h}%; background-color: #0070d2; min-height: 4px; display: block;`}
+                              >
+                                <div class="opacity-0 group-hover:opacity-100 transition-opacity absolute left-1/2 -top-8 -translate-x-1/2 text-white text-[11px] font-medium px-2.5 py-1 rounded shadow-lg whitespace-nowrap z-30 pointer-events-none" style="background-color: #0070d2;">
+                                  {formatNum(d.revenue)} ({d.day})
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Trục hoành ngày tháng ở dưới -->
+                  <div class="flex text-xs text-gray-500 tabular-nums mt-2">
+                    <div class="w-14 sm:w-16 shrink-0"></div>
+                    <div class="flex-1 flex justify-around px-4">
+                      {timeData.map(d => (
+                        <div class="text-[11px] text-gray-600 font-medium text-center flex-1 max-w-[60px]">
+                          {d.day.slice(5)}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div class="py-16 text-center text-gray-400 text-sm">Chưa có dữ liệu bán hàng.</div>
+              )}
+            </div>
+          )}
+
+          <!-- BIỂU ĐỒ TRƯỜNG HỢP 2: MỐI QUAN TÂM = LỢI NHUẬN (ẢNH 2: 3 CỘT ĐỐI SÁNH) -->
+          {metric === 'profit' && !incomplete && (
+            <div>
+              <div class="flex items-center justify-between mb-6">
+                <h2 class="text-sm font-bold text-gray-800 uppercase tracking-wide">
+                  Lợi nhuận {dateRange.label.toLowerCase()}
+                </h2>
+                <div class="flex items-center gap-4 text-xs font-medium">
+                  <span class="flex items-center gap-1.5 text-blue-700">
+                    <span class="w-3 h-3 rounded-xs inline-block" style="background-color: #0070d2;"></span> Lợi nhuận
+                  </span>
+                  <span class="flex items-center gap-1.5 text-emerald-700">
+                    <span class="w-3 h-3 rounded-xs inline-block" style="background-color: #16a34a;"></span> Doanh thu
+                  </span>
+                  <span class="flex items-center gap-1.5 text-amber-700">
+                    <span class="w-3 h-3 rounded-xs inline-block" style="background-color: #eab308;"></span> Giá vốn
+                  </span>
+                </div>
+              </div>
+
+              {timeData.length > 0 ? (
+                <div class="max-w-4xl mx-auto">
+                  <div class="flex">
+                    <!-- Trục tung (Y-Axis) -->
+                    <div class="w-14 sm:w-16 shrink-0 relative h-64 text-right pr-2 text-[11px] text-gray-500 tabular-nums">
+                      {triYTicks.ticks.slice().reverse().map((t, idx) => {
+                        const topPct = (idx / (triYTicks.ticks.length - 1)) * 100;
+                        return (
+                          <div class="absolute right-2 -translate-y-1/2 select-none" style={`top: ${topPct}%`}>
+                            {formatAxisTick(t)}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <!-- Vùng vẽ có lưới ngang và trục đáy -->
+                    <div class="flex-1 relative h-64" style="border-left: 1px solid #9ca3af; border-bottom: 1px solid #9ca3af;">
+                      <!-- Các đường lưới ngang -->
+                      {triYTicks.ticks.map((t) => {
+                        const bottomPct = (t / triYTicks.maxTick) * 100;
+                        return (
+                          <div
+                            class="absolute left-0 right-0 pointer-events-none"
+                            style={`bottom: ${bottomPct}%; border-bottom: 1px solid #e5e7eb;`}
+                          ></div>
+                        );
+                      })}
+
+                      <!-- Cột 3 màu cụm lại phẳng -->
+                      <div class="absolute inset-0 flex items-end justify-around px-4">
+                        {timeData.map(d => {
+                          const hRev = Math.max(1, Math.round((d.revenue / triYTicks.maxTick) * 100));
+                          const hCogs = Math.max(1, Math.round((d.cogs / triYTicks.maxTick) * 100));
+                          const hProfit = Math.max(1, Math.round((Math.abs(d.profit) / triYTicks.maxTick) * 100));
+
+                          return (
+                            <div class="flex items-end justify-center gap-1 flex-1 max-w-[80px] h-full group relative">
+                              <!-- Lợi nhuận -->
+                              <div
+                                class="w-3 sm:w-4 hover:brightness-95 transition-all relative"
+                                style={`height: ${hProfit}%; background-color: #0070d2; min-height: 4px; display: block;`}
+                                title={`Lợi nhuận: ${d.incomplete ? 'Chưa đủ dữ liệu' : formatNum(d.profit) }`}
+                              ></div>
+                              <!-- Doanh thu -->
+                              <div
+                                class="w-3 sm:w-4 hover:brightness-95 transition-all relative"
+                                style={`height: ${hRev}%; background-color: #16a34a; min-height: 4px; display: block;`}
+                                title={`Doanh thu: ${formatNum(d.revenue)}`}
+                              ></div>
+                              <!-- Giá vốn -->
+                              <div
+                                class="w-3 sm:w-4 hover:brightness-95 transition-all relative"
+                                style={`height: ${hCogs}%; background-color: #eab308; min-height: 4px; display: block;`}
+                                title={`Giá vốn: ${d.incomplete ? 'Chưa đủ dữ liệu' : formatNum(d.cogs) }`}
+                              ></div>
+
+                              <!-- Tooltip hover cụm -->
+                              <div class="opacity-0 group-hover:opacity-100 transition-opacity absolute left-1/2 -top-12 -translate-x-1/2 bg-gray-900 text-white text-[10.5px] font-medium px-2 py-1 rounded shadow-lg whitespace-nowrap z-30 pointer-events-none">
+                                <div>{d.day}</div>
+                                <div>DT: {formatNum(d.revenue)} | Lãi: {d.incomplete ? 'Chưa đủ dữ liệu' : formatNum(d.profit) }</div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Trục hoành ngày tháng ở dưới -->
+                  <div class="flex text-xs text-gray-500 tabular-nums mt-2">
+                    <div class="w-14 sm:w-16 shrink-0"></div>
+                    <div class="flex-1 flex justify-around px-4">
+                      {timeData.map(d => (
+                        <div class="text-[11px] text-gray-600 font-medium text-center flex-1 max-w-[80px]">
+                          {d.day.slice(5)}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div class="py-16 text-center text-gray-400 text-sm">Chưa có dữ liệu bán hàng.</div>
+              )}
+            </div>
+          )}
+
+          <!-- BIỂU ĐỒ TRƯỜNG HỢP 3: MỐI QUAN TÂM = NHÂN VIÊN BÁN HÀNG -->
+          {metric === 'staff' && (
+            <div class="space-y-4">
+              <h2 class="text-center text-sm font-semibold text-gray-700 mb-6 uppercase tracking-wide">
+                Doanh thu theo nhân viên bán hàng
+              </h2>
+
+              {staffData.length > 0 ? (
+                <div class="space-y-3 max-w-3xl mx-auto">
+                  {staffData.map(s => {
+                    const pct = Math.max(10, Math.round((s.revenue / (totalRevenue || 1)) * 100));
+                    return (
+                      <div class="flex items-center gap-3 text-[13.5px]">
+                        <div class="w-36 text-right font-medium text-gray-900 truncate">{s.name}</div>
+                        <div class="flex-1 bg-gray-100 rounded-full h-6 overflow-hidden">
+                          <div
+                            class="h-full rounded-full flex items-center justify-end pr-3 text-white text-[11px] font-bold"
+                            style={`width: ${pct}%; background-color: #0070d2;`}
+                          >
+                            {formatNum(s.revenue)}
+                          </div>
+                        </div>
+                        <div class="w-24 text-right tabular-nums text-gray-500 text-xs">{s.order_count} đơn</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div class="py-16 text-center text-gray-400 text-sm">Chưa có dữ liệu nhân viên bán hàng.</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <!-- PHẦN 2: CHẾ ĐỘ BÁO CÁO BẢNG DỮ LIỆU ĐẦY ĐỦ CỘT (TABLE VIEW) -->
+      {view === 'table' && (
+        <div class="overflow-x-auto">
+          <!-- BẢNG DỮ LIỆU THEO THỜI GIAN (BÁN HÀNG) -->
+          {metric === 'time' && (
+            <table class="w-full text-left text-[14.5px] text-gray-800">
+              <thead>
+                <tr class="bg-[#dcf0fb] border-b border-[#bce2f7] text-[#006ca8] font-bold text-[14px]">
+                  <th class="py-3 px-5">Thời gian</th>
+                  <th class="py-3 px-5 text-right tabular-nums">Số lượng đơn</th>
+                  <th class="py-3 px-5 text-right tabular-nums">Tổng tiền hàng</th>
+                  <th class="py-3 px-5 text-right tabular-nums">Giảm giá HĐ</th>
+                  <th class="py-3 px-5 text-right tabular-nums text-blue-700">Doanh thu thuần</th>
+                </tr>
+                <tr class="bg-gray-50 border-b-2 border-gray-200 font-bold text-[14px] text-gray-900">
+                  <td class="py-3 px-5">Tổng cộng</td>
+                  <td class="py-3 px-5 text-right tabular-nums">{totalOrders}</td>
+                  <td class="py-3 px-5 text-right tabular-nums">{formatNum(totalGross)}</td>
+                  <td class="py-3 px-5 text-right tabular-nums">{formatNum(totalDiscount)}</td>
+                  <td class="py-3 px-5 text-right tabular-nums text-blue-700 text-base">{formatNum(totalRevenue)}</td>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-100">
+                {timeData.map(d => (
+                  <tr
+                    class="report-row-clickable cursor-pointer hover:bg-blue-50/70 transition border-b border-gray-100 group"
+                    data-type="day"
+                    data-key={d.day}
+                    title="Bấm để xem chi tiết các đơn hàng của ngày này"
+                  >
+                    <td class="py-3.5 px-5 font-semibold text-blue-700 tabular-nums flex items-center justify-between">
+                      <span class="flex items-center gap-2">
+                        <span>📅</span>
+                        <span>{d.day}</span>
+                      </span>
+                      <span class="text-[11px] text-gray-400 font-normal group-hover:text-blue-600 flex items-center gap-0.5">
+                        <span>Xem đơn</span>
+                        <span>→</span>
+                      </span>
+                    </td>
+                    <td class="py-3.5 px-5 text-right tabular-nums">{d.order_count}</td>
+                    <td class="py-3.5 px-5 text-right tabular-nums font-normal text-gray-700">{formatNum(d.gross_revenue)}</td>
+                    <td class="py-3.5 px-5 text-right tabular-nums font-normal text-gray-500">{formatNum(d.total_discount)}</td>
+                    <td class="py-3.5 px-5 text-right tabular-nums font-bold text-gray-900">{formatNum(d.revenue)}</td>
+                  </tr>
+                ))}
+                {timeData.length === 0 && (
+                  <tr>
+                    <td colspan="5" class="py-12 text-center text-gray-400 text-sm">Không có dữ liệu trong khoảng thời gian này.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
+
+          <!-- BẢNG DỮ LIỆU THEO LỢI NHUẬN -->
+          {metric === 'profit' && (
+            <table class="w-full text-left text-[14.5px] text-gray-800">
+              <thead>
+                <tr class="bg-[#dcf0fb] border-b border-[#bce2f7] text-[#006ca8] font-bold text-[14px]">
+                  <th class="py-3 px-5">Thời gian</th>
+                  <th class="py-3 px-5 text-right tabular-nums">Số đơn</th>
+                  <th class="py-3 px-5 text-right tabular-nums text-emerald-700">Doanh thu thuần</th>
+                  <th class="py-3 px-5 text-right tabular-nums text-amber-700">Giá vốn</th>
+                  <th class="py-3 px-5 text-right tabular-nums text-blue-700">Lợi nhuận gộp</th>
+                  <th class="py-3 px-5 text-right tabular-nums">Tỷ suất LN</th>
+                </tr>
+                <tr class="bg-gray-50 border-b-2 border-gray-200 font-bold text-[14px] text-gray-900">
+                  <td class="py-3 px-5">Tổng cộng</td>
+                  <td class="py-3 px-5 text-right tabular-nums">{totalOrders}</td>
+                  <td class="py-3 px-5 text-right tabular-nums text-emerald-700">{formatNum(totalRevenue)}</td>
+                  <td class="py-3 px-5 text-right tabular-nums text-amber-700">{incomplete ? 'Chưa đủ dữ liệu' : formatNum(totalCogs) }</td>
+                  <td class="py-3 px-5 text-right tabular-nums text-blue-700 text-base">{incomplete ? 'Chưa đủ dữ liệu' : formatNum(totalProfit) }</td>
+                  <td class="py-3 px-5 text-right tabular-nums text-gray-700">{incomplete ? '—' : (totalRevenue > 0 ? Math.round((totalProfit / totalRevenue) * 100) : 0)+'%'}</td>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-100">
+                {timeData.map(d => {
+                  const margin = d.revenue > 0 ? Math.round((d.profit / d.revenue) * 100) : 0;
+                  return (
+                    <tr
+                      class="report-row-clickable cursor-pointer hover:bg-blue-50/70 transition border-b border-gray-100 group"
+                      data-type="day"
+                      data-key={d.day}
+                      title="Bấm để xem chi tiết các đơn hàng của ngày này"
+                    >
+                      <td class="py-3.5 px-5 font-semibold text-blue-700 tabular-nums flex items-center justify-between">
+                        <span class="flex items-center gap-2">
+                          <span>📅</span>
+                          <span>{d.day}</span>
+                        </span>
+                        <span class="text-[11px] text-gray-400 font-normal group-hover:text-blue-600 flex items-center gap-0.5">
+                          <span>Xem đơn</span>
+                          <span>→</span>
+                        </span>
+                      </td>
+                      <td class="py-3.5 px-5 text-right tabular-nums">{d.order_count}</td>
+                      <td class="py-3.5 px-5 text-right tabular-nums font-bold text-gray-900">{formatNum(d.revenue)}</td>
+                      <td class="py-3.5 px-5 text-right tabular-nums text-amber-700">{d.incomplete ? 'Chưa đủ dữ liệu' : formatNum(d.cogs) }</td>
+                      <td class="py-3.5 px-5 text-right tabular-nums font-bold text-blue-700">{d.incomplete ? 'Chưa đủ dữ liệu' : formatNum(d.profit) }</td>
+                      <td class="py-3.5 px-5 text-right tabular-nums text-gray-600">{d.incomplete ? '—' : margin+'%'}</td>
+                    </tr>
+                  );
+                })}
+                {timeData.length === 0 && (
+                  <tr>
+                    <td colspan="6" class="py-12 text-center text-gray-400 text-sm">Không có dữ liệu trong khoảng thời gian này.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
+
+          <!-- BẢNG DỮ LIỆU THEO NHÂN VIÊN BÁN HÀNG -->
+          {metric === 'staff' && (
+            <table class="w-full text-left text-[14.5px] text-gray-800">
+              <thead>
+                <tr class="bg-[#dcf0fb] border-b border-[#bce2f7] text-[#006ca8] font-bold text-[14px]">
+                  <th class="py-3 px-5">Nhân viên / Người bán</th>
+                  <th class="py-3 px-5 text-right tabular-nums">Số đơn hoàn tất</th>
+                  <th class="py-3 px-5 text-right tabular-nums text-emerald-700">Doanh thu thuần</th>
+                  <th class="py-3 px-5 text-right tabular-nums text-amber-700">Giá vốn ước tính</th>
+                  <th class="py-3 px-5 text-right tabular-nums text-blue-700">Lợi nhuận mang về</th>
+                </tr>
+                <tr class="bg-gray-50 border-b-2 border-gray-200 font-bold text-[14px] text-gray-900">
+                  <td class="py-3 px-5">Tổng cộng ({staffData.length} nhân viên)</td>
+                  <td class="py-3 px-5 text-right tabular-nums">{totalOrders}</td>
+                  <td class="py-3 px-5 text-right tabular-nums text-emerald-700">{formatNum(totalRevenue)}</td>
+                  <td class="py-3 px-5 text-right tabular-nums text-amber-700">{incomplete ? 'Chưa đủ dữ liệu' : formatNum(totalCogs) }</td>
+                  <td class="py-3 px-5 text-right tabular-nums text-blue-700 text-base">{incomplete ? 'Chưa đủ dữ liệu' : formatNum(totalProfit) }</td>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-100">
+                {staffData.map(s => (
+                  <tr
+                    class="report-row-clickable cursor-pointer hover:bg-blue-50/70 transition border-b border-gray-100 group"
+                    data-type="staff"
+                    data-key={s.name}
+                    title="Bấm để xem chi tiết các đơn hàng của nhân viên này"
+                  >
+                    <td class="py-3.5 px-5 font-semibold text-blue-700 flex items-center justify-between">
+                      <span class="flex items-center gap-2">
+                        <span>👤</span>
+                        <span>{s.name}</span>
+                      </span>
+                      <span class="text-[11px] text-gray-400 font-normal group-hover:text-blue-600 flex items-center gap-0.5">
+                        <span>Xem đơn</span>
+                        <span>→</span>
+                      </span>
+                    </td>
+                    <td class="py-3.5 px-5 text-right tabular-nums">{s.order_count}</td>
+                    <td class="py-3.5 px-5 text-right tabular-nums font-bold text-gray-900">{formatNum(s.revenue)}</td>
+                    <td class="py-3.5 px-5 text-right tabular-nums text-amber-700">{s.incomplete ? 'Chưa đủ dữ liệu' : formatNum(s.cogs) }</td>
+                    <td class="py-3.5 px-5 text-right tabular-nums font-bold text-blue-700">{s.incomplete ? 'Chưa đủ dữ liệu' : formatNum(s.profit) }</td>
+                  </tr>
+                ))}
+                {staffData.length === 0 && (
+                  <tr>
+                    <td colspan="5" class="py-12 text-center text-gray-400 text-sm">Chưa có nhân viên nào bán hàng trong khoảng thời gian này.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      <!-- KHU VỰC DRILLDOWN: CHI TIẾT CÁC ĐƠN HÀNG PHÍA DƯỚI BẢNG -->
+      <div id="orderDetailSection" class="p-5 border-t-2 border-blue-500 bg-white space-y-3">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <h3 class="text-base font-bold text-gray-900 flex items-center gap-2">
+              <span>📋 Chi tiết các đơn hàng:</span>
+              <span id="selectedTargetLabel" class="px-2.5 py-0.5 rounded-lg bg-blue-100 text-blue-800 font-bold text-sm">---</span>
+            </h3>
+            <p class="text-xs text-gray-500 mt-0.5">
+              Bấm vào bất kỳ dòng ngày hoặc nhân viên ở bảng trên để xem chi tiết từng đơn hàng cụ thể phía dưới.
+            </p>
+          </div>
+          <div class="flex items-center gap-2 text-xs font-semibold">
+            <span class="px-2.5 py-1 rounded-lg bg-blue-50 text-blue-800 border border-blue-200">
+              Số đơn: <strong id="detailOrderCount" class="font-bold">0</strong>
+            </span>
+            <span class="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200">
+              Doanh thu: <strong id="detailOrderRevenue" class="font-bold">0đ</strong>
+            </span>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto rounded-xl border border-line">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-[#f8f9fa] border-b border-line font-bold text-gray-700 select-none">
+              <tr>
+                <th class="p-3 w-28">Mã đơn</th>
+                <th class="p-3 w-24">Thời gian</th>
+                <th class="p-3">Khách hàng</th>
+                <th class="p-3">Sản phẩm đã bán</th>
+                <th class="p-3 text-right">Tổng tiền</th>
+                <th class="p-3 text-right">Đã thanh toán</th>
+                <th class="p-3 text-center">Phương thức</th>
+                <th class="p-3 text-center">Người bán</th>
+                <th class="p-3 text-center">Trạng thái</th>
+              </tr>
+            </thead>
+            <tbody id="detailOrdersBody" class="divide-y divide-line">
+              <!-- Rendered via Client JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+</AdminLayout>
+
+<script is:inline define:vars={{ detailedOrders }}>
+  const orders = detailedOrders || [];
+
+  function formatVND(val) {
+    if (!val || isNaN(val)) return '0đ';
+    return new Intl.NumberFormat('en-US').format(val) + 'đ';
+  }
+
+  function formatTime(isoStr) {
+    if (!isoStr) return '--';
+    try {
+      const d = new Date(isoStr);
+      return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return isoStr;
+    }
+  }
+
+  function renderOrders(filteredOrders, label) {
+    const labelEl = document.getElementById('selectedTargetLabel');
+    const countEl = document.getElementById('detailOrderCount');
+    const revEl = document.getElementById('detailOrderRevenue');
+    const tbody = document.getElementById('detailOrdersBody');
+    if (!labelEl || !countEl || !revEl || !tbody) return;
+
+    labelEl.textContent = label;
+    countEl.textContent = filteredOrders.length;
+    const totalRev = filteredOrders.reduce((s, o) => s + (o.amount_total_cents || 0), 0);
+    revEl.textContent = formatVND(totalRev);
+
+    if (filteredOrders.length === 0) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="9" class="p-8 text-center text-gray-400 text-xs">
+            Không có đơn hàng nào trong mục này.
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    tbody.innerHTML = filteredOrders.map(o => {
+      const items = o.items_summary || 'Hàng hóa bán lẻ';
+      const cust = o.customer_name ? `${o.customer_name} ${o.customer_phone ? `(${o.customer_phone})` : ''}` : 'Khách lẻ tại xưởng';
+      const payMethod = o.payment_method === 'BANK' ? 'Chuyển khoản' : 'Tiền mặt';
+
+      return `
+        <tr class="hover:bg-blue-50/40 transition">
+          <td class="p-3 font-bold font-mono text-blue-600">
+            <a href="/admin/orders/${o.id}" target="_blank" class="hover:underline flex items-center gap-1">
+              <span>${o.order_code || ('ĐH' + o.id)}</span>
+              <svg class="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            </a>
+          </td>
+          <td class="p-3 text-gray-500 tabular-nums">${formatTime(o.created_at)}</td>
+          <td class="p-3 font-medium text-gray-800">${cust}</td>
+          <td class="p-3 text-gray-700 max-w-xs truncate" title="${items}">
+            <span class="font-medium">${items}</span>
+          </td>
+          <td class="p-3 text-right font-bold tabular-nums text-gray-900">${formatVND(o.amount_total_cents)}</td>
+          <td class="p-3 text-right font-medium tabular-nums text-emerald-700">${formatVND(o.paid_amount_cents)}</td>
+          <td class="p-3 text-center text-gray-600">${payMethod}</td>
+          <td class="p-3 text-center text-gray-700">${o.staff_name || 'Admin'}</td>
+          <td class="p-3 text-center">
+            <span class="px-2 py-0.5 rounded text-[10.5px] font-bold ${o.order_status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}">
+              ${o.order_status || 'Hoàn thành'}
+            </span>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  function setupDrilldown() {
+    const rows = document.querySelectorAll('.report-row-clickable');
+    rows.forEach(r => {
+      r.addEventListener('click', () => {
+        rows.forEach(x => {
+          x.classList.remove('bg-blue-100/80', 'font-bold');
+        });
+        r.classList.add('bg-blue-100/80', 'font-bold');
+
+        const type = r.getAttribute('data-type');
+        const key = r.getAttribute('data-key');
+        if (type === 'day') {
+          const matched = orders.filter(o => o.day === key);
+          renderOrders(matched, 'Ngày ' + key);
+        } else if (type === 'staff') {
+          const matched = orders.filter(o => o.staff_name === key);
+          renderOrders(matched, 'Người bán: ' + key);
+        }
+      });
+    });
+
+    // Tự động kích hoạt chọn dòng đầu tiên hoặc render toàn bộ
+    if (rows.length > 0) {
+      rows[0].click();
+    } else {
+      renderOrders(orders, 'Toàn bộ kỳ');
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupDrilldown);
+  } else {
+    setupDrilldown();
+  }
+</script>

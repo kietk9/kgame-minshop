@@ -1,0 +1,356 @@
+---
+import { hasPermission } from '../../../features/auth/permissions';
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import { listPosOrders } from '../../../features/kgame/db';
+
+export const prerender = false;
+
+const search = Astro.url.searchParams.get('q') || '';
+const orderTypeFilter = Astro.url.searchParams.get('type') || '';
+const orderStatus = Astro.url.searchParams.get('status') || '';
+const paymentStatus = Astro.url.searchParams.get('payment_status') || '';
+
+const { orders, total } = await listPosOrders(env.DB, {
+  orderType: orderTypeFilter || undefined,
+  orderStatus: orderStatus || undefined,
+  paymentStatus: paymentStatus || undefined,
+  search: search || undefined,
+  limit: 100,
+});
+
+// Thống kê nhanh KPI
+const statsRes = await env.DB.prepare(`
+  SELECT 
+    COUNT(*) AS total_orders,
+    SUM(CASE WHEN order_type = 'PREORDER' THEN 1 ELSE 0 END) AS total_preorders,
+    SUM(CASE WHEN order_type != 'PREORDER' OR order_type IS NULL THEN 1 ELSE 0 END) AS total_sales,
+    SUM(CASE WHEN order_status IN ('PROCESSING', 'DELIVERING') THEN 1 ELSE 0 END) AS active_orders,
+    SUM(CASE WHEN order_status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed_orders,
+    SUM(paid_amount_cents) AS total_revenue_cents,
+    SUM(cod_amount_cents) AS total_debt_cents
+  FROM orders
+  WHERE order_type = 'SALE' OR order_code IS NOT NULL
+`).first<any>();
+
+const totalOrders = statsRes?.total_orders || 0;
+const totalSales = statsRes?.total_sales || 0;
+const totalPreorders = statsRes?.total_preorders || 0;
+const activeOrders = statsRes?.active_orders || 0;
+const completedOrders = statsRes?.completed_orders || 0;
+const totalRevenue = statsRes?.total_revenue_cents || 0;
+const totalDebt = statsRes?.total_debt_cents || 0;
+
+const formatNumber = (val: number) => {
+  if (!val || isNaN(val)) return '0';
+  return new Intl.NumberFormat('en-US').format(val);
+};
+const formatVND = formatNumber;
+
+const formatDate = (iso: string) => {
+  if (!iso) return '-';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
+  } catch {
+    return iso;
+  }
+};
+
+const statusBadges: Record<string, { label: string; color: string }> = {
+  PENDING: { label: 'Chờ xử lý', color: 'bg-amber-100 text-amber-800' },
+  PROCESSING: { label: 'Đang xử lý / Đóng hàng', color: 'bg-blue-100 text-blue-800' },
+  DELIVERING: { label: 'Đang giao xe / GHN', color: 'bg-purple-100 text-purple-800' },
+  COMPLETED: { label: 'Đã hoàn tất', color: 'bg-emerald-100 text-emerald-800' },
+  CANCELLED: { label: 'Đã hủy', color: 'bg-red-100 text-red-800' },
+};
+
+const paymentBadges: Record<string, { label: string; color: string }> = {
+  PAID: { label: 'Đã thanh toán đủ', color: 'bg-emerald-100 text-emerald-800' },
+  PARTIALLY_PAID: { label: 'Đã cọc (Còn nợ)', color: 'bg-amber-100 text-amber-800' },
+  UNPAID: { label: 'Chưa thanh toán', color: 'bg-red-100 text-red-800' },
+};
+
+const error = Astro.url.searchParams.get('error');
+---
+
+<AdminLayout title="Quản Lý Đơn Hàng & POS" active="orders">
+  <!-- HEADER & NÚT TẠO ĐƠN -->
+  <div class="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold text-gray-900">Bán Hàng &amp; Quản Lý Đơn Hàng (POS)</h1>
+      <p class="mt-1 text-sm text-gray-500">
+        Xuất bán máy theo Mã bộ Program Code cá thể hóa, bán linh kiện &amp; tự động tích hợp Sổ Quỹ / Sổ Kho.
+      </p>
+    </div>
+
+    {hasPermission(Astro.locals.adminPrincipal,'sales.create') && <div class="flex items-center gap-3">
+      <a
+        href="/admin/orders/new"
+        class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-white font-semibold text-sm shadow hover:bg-blue-700 transition"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        Tạo Đơn Hàng POS Mới
+      </a>
+    </div>}
+  </div>
+
+  {error && (
+    <div class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex items-center gap-2">
+      <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
+      <span>{error}</span>
+    </div>
+  )}
+
+  <!-- THẺ KPI TÀI CHÍNH & VẬN HÀNH -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <div class="bg-white rounded-xl border border-line p-4 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-medium text-gray-500">Tổng đơn hàng POS</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/></svg>
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-2xl font-semibold text-gray-900 tabular-nums">{totalOrders}</span>
+        <span class="text-xs text-emerald-600 font-medium">{completedOrders} đã hoàn tất</span>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl border border-line p-4 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-medium text-gray-500">Đang đóng gói / Giao xe</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-50 text-purple-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-2xl font-semibold text-purple-700 tabular-nums">{activeOrders}</span>
+        <span class="text-xs text-gray-500">cần theo dõi vận chuyển</span>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl border border-line p-4 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-medium text-gray-500">Doanh thu thực thu (Sổ Quỹ)</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-xl font-semibold text-emerald-700 tabular-nums">{formatVND(totalRevenue)}</span>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl border border-line p-4 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-medium text-gray-500">Còn lại cần thu (COD / Nợ)</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-red-50 text-red-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-xl font-semibold text-red-600 tabular-nums">{formatVND(totalDebt)}</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB CHỌN NHANH: TẤT CẢ | BÁN HÀNG | ĐẶT HÀNG (CHUẨN KIOTVIET) -->
+  <div class="flex items-center gap-2 mb-4 border-b border-gray-200 text-sm font-semibold">
+    <a
+      href={`/admin/orders${search ? `?q=${encodeURIComponent(search)}` : ''}`}
+      class={`pb-2.5 px-3 border-b-2 transition flex items-center gap-1.5 ${
+        !orderTypeFilter ? 'border-brand text-brand font-bold' : 'border-transparent text-gray-500 hover:text-gray-900'
+      }`}
+    >
+      <span>Tất cả</span>
+      <span class="px-1.5 py-0.5 rounded-full text-xs bg-gray-100 text-gray-600 tabular-nums">{totalOrders}</span>
+    </a>
+    <a
+      href={`/admin/orders?type=SALE${search ? `&q=${encodeURIComponent(search)}` : ''}`}
+      class={`pb-2.5 px-3 border-b-2 transition flex items-center gap-1.5 ${
+        orderTypeFilter === 'SALE' ? 'border-brand text-brand font-bold' : 'border-transparent text-gray-500 hover:text-gray-900'
+      }`}
+    >
+      <span>⚡ Bán hàng</span>
+      <span class="px-1.5 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700 tabular-nums">{totalSales}</span>
+    </a>
+    <a
+      href={`/admin/orders?type=PREORDER${search ? `&q=${encodeURIComponent(search)}` : ''}`}
+      class={`pb-2.5 px-3 border-b-2 transition flex items-center gap-1.5 ${
+        orderTypeFilter === 'PREORDER' ? 'border-amber-500 text-amber-700 font-bold' : 'border-transparent text-gray-500 hover:text-gray-900'
+      }`}
+    >
+      <span>📋 Đặt hàng</span>
+      <span class="px-1.5 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700 tabular-nums">{totalPreorders}</span>
+    </a>
+  </div>
+
+  <!-- BỘ LỌC TÌM KIẾM -->
+  <div class="bg-white rounded-xl border border-line p-4 mb-6 shadow-sm">
+    <form method="GET" class="grid grid-cols-1 md:grid-cols-12 gap-3 text-[13.5px]">
+      <input type="hidden" name="type" value={orderTypeFilter} />
+      <div class="md:col-span-5 relative">
+        <input
+          type="text"
+          name="q"
+          value={search}
+          placeholder="Tìm theo Mã đơn ĐH, Tên khách, SĐT, hoặc Mã bộ..."
+          class="w-full rounded-lg border border-line bg-white pl-9 pr-3 py-2 text-[13.5px] text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand"
+        />
+        <svg class="w-4 h-4 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+      </div>
+
+      <div class="md:col-span-3">
+        <select name="status" class="w-full rounded-lg border border-line bg-white px-3 py-2 text-[13.5px] text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand">
+          <option value="">-- Trạng thái đơn (Tất cả) --</option>
+          <option value="PENDING" selected={orderStatus === 'PENDING'}>Chờ xử lý</option>
+          <option value="PROCESSING" selected={orderStatus === 'PROCESSING'}>Đang xử lý / Đóng hàng</option>
+          <option value="DELIVERING" selected={orderStatus === 'DELIVERING'}>Đang giao xe / GHN</option>
+          <option value="COMPLETED" selected={orderStatus === 'COMPLETED'}>Đã hoàn tất</option>
+          <option value="CANCELLED" selected={orderStatus === 'CANCELLED'}>Đã hủy</option>
+        </select>
+      </div>
+
+      <div class="md:col-span-3">
+        <select name="payment_status" class="w-full rounded-lg border border-line bg-white px-3 py-2 text-[13.5px] text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand">
+          <option value="">-- Thanh toán (Tất cả) --</option>
+          <option value="PAID" selected={paymentStatus === 'PAID'}>Đã thanh toán đủ</option>
+          <option value="PARTIALLY_PAID" selected={paymentStatus === 'PARTIALLY_PAID'}>Đã cọc (Còn nợ)</option>
+          <option value="UNPAID" selected={paymentStatus === 'UNPAID'}>Chưa thanh toán</option>
+        </select>
+      </div>
+
+      <div class="md:col-span-1 flex gap-2">
+        <button type="submit" class="w-full py-2 px-3 rounded-lg bg-gray-900 text-white text-[13.5px] font-semibold hover:bg-black transition">
+          Lọc
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <!-- BẢNG DANH SÁCH ĐƠN HÀNG -->
+  <div class="bg-white rounded-xl border border-line overflow-hidden shadow-sm">
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-[14.5px]">
+        <thead class="bg-[#f8f9fa] text-gray-700 text-[14px] font-semibold border-b border-line select-none">
+          <tr>
+            <th class="p-3">Mã đơn</th>
+            <th class="p-3">Thời gian</th>
+            <th class="p-3">Khách hàng</th>
+            <th class="p-3">Giao nhận</th>
+            <th class="p-3 text-center">Số món</th>
+            <th class="p-3 text-right">Tổng tiền</th>
+            <th class="p-3 text-right">Đã thu</th>
+            <th class="p-3 text-right">Còn nợ (COD)</th>
+            <th class="p-3 text-center">Trạng thái</th>
+            <th class="p-3 text-center">Thao tác</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-line">
+          {orders.length > 0 ? (
+            orders.map((o: any) => {
+              const debt = Math.max(0, o.amount_total_cents - o.paid_amount_cents);
+              const isPre = o.order_type === 'PREORDER';
+              return (
+                <tr class="hover:bg-blue-50/40 transition">
+                  <td class="p-3">
+                    <div class="flex items-center gap-1.5">
+                      <a href={`/admin/orders/${o.id}`} class="font-bold text-blue-600 hover:underline text-[14px]">
+                        {o.order_code || `ĐH#${o.id}`}
+                      </a>
+                    </div>
+                    {isPre ? (
+                      <span class="inline-block mt-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[11px] font-bold">
+                        📋 Đặt hàng
+                      </span>
+                    ) : (
+                      <span class="inline-block mt-1 px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 text-[10.5px] font-semibold">
+                        ⚡ Bán hàng
+                      </span>
+                    )}
+                  </td>
+                  <td class="p-3 text-gray-500 whitespace-nowrap text-[13px]">{formatDate(o.created_at)}</td>
+                  <td class="p-3">
+                    <div class="font-normal text-gray-900 text-[14.5px]">{o.customer_name || 'Khách vãng lai'}</div>
+                    <div class="text-[12px] text-gray-400">{o.customer_phone || '-'}</div>
+                  </td>
+                  <td class="p-3 text-[13.5px]">
+                    {o.carrier === 'PICKUP' && <span class="text-gray-700">🏢 Tại quầy</span>}
+                    {o.carrier === 'BUS' && (
+                      <div>
+                        <span class="text-purple-700 font-medium">🚌 {o.bus_station || 'Xe khách'}</span>
+                        {o.bus_plate && <div class="text-[11px] text-gray-400">{o.bus_plate}</div>}
+                      </div>
+                    )}
+                    {o.carrier === 'GHN' && <span class="text-blue-700 font-medium">📦 Bưu điện</span>}
+                    {!o.carrier && <span class="text-gray-400 italic">Tại quầy</span>}
+                  </td>
+                  <td class="p-3 text-center tabular-nums text-gray-800 font-normal">{o.item_count || 1}</td>
+                  <td class="p-3 text-right tabular-nums text-gray-900 font-semibold">{formatVND(o.amount_total_cents)}</td>
+                  <td class="p-3 text-right tabular-nums text-emerald-700 font-medium">{formatVND(o.paid_amount_cents)}</td>
+                  <td class="p-3 text-right tabular-nums">
+                    {debt > 0 ? (
+                      <span class="text-red-600 font-semibold">{formatVND(debt)}</span>
+                    ) : (
+                      <span class="text-gray-400 font-normal">0</span>
+                    )}
+                  </td>
+                  <td class="p-3 text-center whitespace-nowrap">
+                    <div class="space-y-1">
+                      <span class={`inline-block px-2 py-0.5 rounded text-[12px] font-medium ${statusBadges[o.order_status]?.color || 'bg-gray-100 text-gray-800'}`}>
+                        {statusBadges[o.order_status]?.label || o.order_status}
+                      </span>
+                      <div>
+                        <span class={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${paymentBadges[o.payment_status]?.color || 'bg-gray-100 text-gray-800'}`}>
+                          {paymentBadges[o.payment_status]?.label || o.payment_status}
+                        </span>
+                      </div>
+                    </div>
+                  </td>
+                  <td class="p-3 text-center whitespace-nowrap">
+                    <div class="inline-flex items-center gap-1.5">
+                      {isPre && o.order_status !== 'COMPLETED' ? (
+                        <a
+                          href={`/admin/sale?load_preorder=${o.id}`}
+                          class="px-2.5 py-1 rounded bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white font-bold text-xs shadow-xs transition flex items-center gap-1"
+                          title="Mở lên màn hình Bán hàng (POS) để xuất bán và hoàn tất"
+                        >
+                          <span>⚡ Xử lý đơn</span>
+                        </a>
+                      ) : null}
+                      <a
+                        href={`/admin/orders/${o.id}`}
+                        class="px-2.5 py-1 rounded bg-blue-50 text-brand hover:bg-blue-100 font-medium text-xs transition"
+                      >
+                        Chi tiết
+                      </a>
+                      <a
+                        href={`/admin/orders/${o.id}/print`}
+                        target="_blank"
+                        class="px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200 transition"
+                        title="In hóa đơn"
+                      >
+                        🖨️
+                      </a>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })
+          ) : (
+            <tr>
+              <td colspan="10" class="p-8 text-center text-gray-500">
+                <div class="max-w-xs mx-auto space-y-2">
+                  <svg class="w-10 h-10 text-gray-300 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/></svg>
+                  <p class="font-medium text-gray-700">Chưa có đơn hàng nào phù hợp.</p>
+                  <p class="text-xs text-gray-400">Bấm nút "Tạo Đơn Hàng POS Mới" ở trên để xuất bán đơn đầu tiên.</p>
+                </div>
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</AdminLayout>

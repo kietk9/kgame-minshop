@@ -1,0 +1,41 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { getPendingActions, pendingKinds } from '../../features/kgame/pendingActions';
+export const prerender = false;
+const data = await getPendingActions(env.DB,{kind:Astro.url.searchParams.get('kind') || '',search:Astro.url.searchParams.get('q') || '',page:Number(Astro.url.searchParams.get('page') || 1)});
+const labels = {CUSTOMER_REFUND:'Chờ hoàn cho khách',SUPPLIER_REFUND:'Chờ nhà cung cấp hoàn',INSPECTION:'Hàng trả chờ kiểm tra',DEFECTIVE:'Hàng lỗi giữ riêng'};
+const number = (n:number) => new Intl.NumberFormat('vi-VN').format(n);
+const date = (raw:string) => {
+ const value = new Date(/(?:Z|[+-]\d\d:\d\d)$/.test(raw) ? raw : raw.replace(' ','T')+'Z');
+ return Number.isNaN(value.getTime()) ? raw : value.toLocaleString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'});
+};
+const pageUrl = (page:number) => `/admin/pending-actions?${new URLSearchParams({kind:data.kind,q:data.search,page:String(page)})}`;
+const pages = Math.max(1,Math.ceil(data.summary.count/data.pageSize));
+---
+<AdminLayout title="Cần xử lý" active="pending-actions">
+ <h1 class="text-2xl font-bold mb-2">Cần xử lý</h1>
+ <p class="text-gray-600 mb-5">Theo dõi tiền chờ hoàn và hàng khách trả. Mở chứng từ để xử lý; chỉ ghi thu/chi khi đã nhận hoặc trả tiền thực tế.</p>
+ <form method="GET" class="flex flex-wrap items-end gap-3 mb-5">
+  <label class="flex-1 min-w-48">Tìm chứng từ, đối tác, hàng hóa<input class="block w-full rounded border p-2 mt-1" name="q" maxlength="200" value={data.search} /></label>
+  <label>Loại việc<select name="kind" class="block rounded border p-2 mt-1"><option value="">Tất cả</option>{pendingKinds.map(k=><option value={k} selected={data.kind===k}>{labels[k]}</option>)}</select></label>
+  <button class="rounded bg-blue-700 px-4 py-2 text-white">Lọc</button><a href="/admin/pending-actions" class="p-2 text-blue-700">Xóa bộ lọc</a>
+ </form>
+ <p class="text-sm text-gray-600 mb-2">Tổng theo bộ lọc, trên tất cả các trang · {number(data.summary.count)} mục</p>
+ <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 mb-5">
+  {[['Chờ hoàn cho khách',`${number(data.summary.customer_refund)} đ`],['Chờ nhà cung cấp hoàn',`${number(data.summary.supplier_refund)} đ`],['Hàng trả chờ kiểm tra',`${number(data.summary.inspection_quantity)} sản phẩm`],['Hàng lỗi giữ riêng',`${number(data.summary.defective_quantity)} sản phẩm`]].map(([label,value])=><div class="rounded border bg-white p-4"><p class="text-sm text-gray-600">{label}</p><p class="text-xl font-bold mt-2">{value}</p></div>)}
+ </div>
+ <p class="mb-4 text-sm text-amber-800">Hàng lỗi còn giữ riêng chưa được bán lại. Mở chứng từ để ghi nhận phần đã tiêu hủy; hàng cần sửa tiếp tục giữ riêng, chưa chuyển vào luồng sửa chữa.</p>
+ <div class="overflow-x-auto rounded border bg-white">
+  <table class="w-full text-sm text-left"><thead class="bg-gray-100"><tr>{['Việc cần xử lý','Chứng từ / đối tác','Nội dung','Còn lại','Thao tác'].map(s=><th class="p-3">{s}</th>)}</tr></thead>
+   <tbody>{data.items.map(item=><tr class="border-t align-top">
+    <td class="p-3 min-w-40"><strong>{labels[item.kind]}</strong><p class="text-xs text-gray-500 mt-1">{date(item.created_at)}</p></td>
+    <td class="p-3 min-w-40"><strong>{item.document_code}</strong><p>{item.partner_name || 'Đối tác cần đối soát'}</p><p class="text-xs text-gray-500">{item.partner_code || 'Chưa có mã'} · ID {item.partner_id}</p></td>
+    <td class="p-3 min-w-40 break-words">{item.detail}</td><td class="p-3 whitespace-nowrap font-semibold">{item.quantity>0 ? `${number(item.quantity)} sản phẩm` : `${number(item.amount)} đ`}</td>
+    <td class="p-3 min-w-32">{item.href ? <a class="text-blue-700 underline" href={item.href}>{item.kind==='DEFECTIVE'?'Xử lý hàng lỗi':'Mở chứng từ'}</a> : <span class="text-red-700">Cần đối soát chứng từ gốc</span>}</td>
+   </tr>)}</tbody>
+  </table>
+  {data.items.length===0 && <p class="p-6 text-gray-600">{data.summary.count>0?'Trang này không có mục. Hãy quay về trang đầu.':'Không có mục nào theo bộ lọc hiện tại.'}</p>}
+ </div>
+ <nav aria-label="Phân trang" class="flex gap-4 items-center mt-4"><a href={pageUrl(1)} class="text-blue-700">Trang đầu</a>{data.page>1 && <a href={pageUrl(data.page-1)} class="text-blue-700">Trang trước</a>}<span>Trang {data.page} / {pages}</span>{pages>data.page && <a href={pageUrl(data.page+1)} class="text-blue-700">Trang sau</a>}</nav>
+</AdminLayout>

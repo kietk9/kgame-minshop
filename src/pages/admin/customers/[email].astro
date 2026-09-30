@@ -1,0 +1,80 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import { formatPrice, formatDate, getConfig } from '../../../config';
+import { getCustomerOrders, getCustomerSummary } from '../../../features/customers/db';
+import { orderReference } from '../../../features/orders/number';
+import { paginate, queryHref } from '../../../pagination';
+import Pagination from '../../../components/Pagination.astro';
+
+const email = Astro.params.email ? decodeURIComponent(Astro.params.email) : '';
+const summary = email ? await getCustomerSummary(env.DB, email) : null;
+
+// Unknown email (no orders) → 404, so the page can't be used to probe addresses.
+if (!summary) {
+  return new Response('Not found', { status: 404 });
+}
+
+const PAGE_SIZE = 50;
+const { page, offset, totalPages } = paginate(
+  Astro.url.searchParams,
+  summary.orders,
+  PAGE_SIZE,
+);
+const orders = await getCustomerOrders(env.DB, email, PAGE_SIZE, offset);
+const base = `/admin/customers/${encodeURIComponent(email)}`;
+const hrefFor = (p: number) => queryHref(base, { page: p > 1 ? p : undefined });
+const onCfg = getConfig().orderNumber;
+const timeZone = Astro.locals.settings?.timeZone ?? getConfig().timeZone;
+---
+
+<AdminLayout title={email} active="customers">
+  <a
+    href="/admin/customers"
+    class="text-[13px] text-gray-500 hover:text-brand flex items-center gap-1 mb-3"
+  >
+    &larr; Quay lại danh sách khách hàng
+  </a>
+  <h1 class="text-2xl font-bold text-gray-900 break-all">{email}</h1>
+  <p class="mt-1 mb-6 text-[13.5px] text-gray-500">
+    {summary.orders} đơn hàng · {formatPrice(summary.lifetime_cents)} tích lũy
+  </p>
+
+  <div class="bg-white rounded-xl border border-line shadow-sm overflow-hidden mb-6">
+    <table class="w-full text-left text-[14.5px] text-gray-700">
+      <thead class="bg-[#f8f9fa] text-[14px] font-semibold text-gray-700 border-b border-line select-none">
+        <tr>
+          <th class="px-4 py-3">Mã đơn hàng</th>
+          <th class="px-4 py-3 text-right">Tổng tiền</th>
+          <th class="px-4 py-3 text-center">Trạng thái</th>
+          <th class="px-4 py-3 text-right">Thời gian</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-line">
+        {
+          orders.map((o) => (
+            <tr class="hover:bg-blue-50/40 transition">
+              <td class="px-4 py-3">
+                <a
+                  href={`/admin/orders/${o.public_id}`}
+                  class="text-brand font-normal tabular-nums hover:underline"
+                >
+                  #{orderReference(o.public_id, o.id, onCfg)}
+                </a>
+              </td>
+              <td class="px-4 py-3 text-right tabular-nums font-normal text-gray-900">{formatPrice(o.amount_total_cents, o.currency)}</td>
+              <td class="px-4 py-3 text-center">
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-[12px] font-medium bg-gray-100 text-gray-700">
+                  {o.status}
+                </span>
+              </td>
+              <td class="px-4 py-3 text-right text-gray-500 tabular-nums text-[13px]">{formatDate(o.created_at, undefined, timeZone)}</td>
+            </tr>
+          ))
+        }
+      </tbody>
+    </table>
+  </div>
+
+  <Pagination page={page} totalPages={totalPages} hrefFor={hrefFor} />
+</AdminLayout>

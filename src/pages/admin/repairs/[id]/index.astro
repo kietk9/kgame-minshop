@@ -1,0 +1,1288 @@
+---
+import AdminLayout from '../../../../layouts/AdminLayout.astro';
+import { env } from 'cloudflare:workers';
+import { getRepairTicketById } from '../../../../features/kgame/db';
+
+export const prerender = false;
+
+const ticketId = Number(Astro.params.id);
+if (!ticketId) {
+  return Astro.redirect('/admin/repairs');
+}
+
+const data = await getRepairTicketById(env.DB, ticketId);
+if (!data || !data.ticket) {
+  return Astro.redirect('/admin/repairs?error=not_found');
+}
+
+const { ticket, events, items, cashTransactions = [] } = data;
+
+const totalCollected = cashTransactions
+  .filter((c: any) => c.flow_type === 'IN')
+  .reduce((sum: number, c: any) => sum + (c.amount_cents || 0), 0);
+
+const totalPaidOut = cashTransactions
+  .filter((c: any) => c.flow_type === 'OUT')
+  .reduce((sum: number, c: any) => sum + (c.amount_cents || 0), 0);
+
+const isFullyPaid = (ticket.repair_price_cents || 0) > 0 && totalCollected >= (ticket.repair_price_cents || 0);
+
+const success = Astro.url.searchParams.get('success');
+const error = Astro.url.searchParams.get('error');
+
+// Lấy danh sách linh kiện trong kho để kỹ thuật xuất thay thế (REPAIR_USE)
+const { results: spareParts } = await env.DB.prepare(`
+  SELECT p.id AS product_id, p.name AS product_name, p.product_code, p.stock,
+         pt.id AS type_id, pt.name AS type_name, pt.cost_price_cents
+  FROM products p
+  LEFT JOIN product_types pt ON p.id = pt.product_id
+  ORDER BY p.name ASC
+`).all<any>();
+
+const formatNumber = (cents: number) => {
+  if (!cents || isNaN(cents)) return '0';
+  return new Intl.NumberFormat('en-US').format(cents);
+};
+const formatVND = formatNumber;
+
+const formatDate = (dStr?: string | null) => {
+  if (!dStr) return '---';
+  try {
+    const d = new Date(dStr);
+    return isNaN(d.getTime()) ? dStr : d.toLocaleDateString('vi-VN');
+  } catch {
+    return dStr;
+  }
+};
+
+const formatDateTime = (dStr?: string | null) => {
+  if (!dStr) return '---';
+  try {
+    const d = new Date(dStr);
+    return isNaN(d.getTime()) ? dStr : d.toLocaleString('vi-VN');
+  } catch {
+    return dStr;
+  }
+};
+
+// Danh mục tất cả trạng thái chuẩn
+const allStatusLabels: Record<string, string> = {
+  RECEIVED: 'Tiếp nhận mới',
+  DIAGNOSING: 'Đang kiểm tra kỹ thuật',
+  QUOTED: 'Đã báo giá khách',
+  APPROVED: 'Khách đã duyệt giá',
+  REPAIRING: 'Đang sửa chữa (Nội bộ)',
+  SENT_TO_PARTNER: 'Đang gửi đối tác ngoài',
+  TESTING: 'Đang chạy Test thực tế',
+  READY_FOR_RETURN: 'Chờ giao trả khách',
+  COMPLETED: 'Hoàn tất quy trình',
+  CANCELLED: 'Hủy sửa chữa',
+};
+
+// Pipeline steps
+const customerSteps = [
+  { key: 'RECEIVED', label: '1. Tiếp nhận' },
+  { key: 'DIAGNOSING', label: '2. Kiểm tra' },
+  { key: 'QUOTED', label: '3. Báo giá' },
+  { key: 'REPAIRING', label: '4. Sửa chữa' },
+  { key: 'TESTING', label: '5. Test máy' },
+  { key: 'READY_FOR_RETURN', label: '6. Trả khách' },
+  { key: 'COMPLETED', label: '7. Hoàn tất' },
+];
+
+const kgameSteps = [
+  { key: 'RECEIVED', label: '1. Tiếp nhận' },
+  { key: 'REPAIRING', label: '2. Sửa chữa' },
+  { key: 'TESTING', label: '3. Test máy' },
+  { key: 'COMPLETED', label: '4. Nhập lại kho' },
+];
+
+const steps = ticket.owner_type === 'CUSTOMER' ? customerSteps : kgameSteps;
+const currentStepIdx = steps.findIndex((s) => s.key === ticket.status);
+
+const isSelfProduced = ticket.unit_is_self_produced === 1 || ticket.unit_manufacturer === 'Tôi sản xuất';
+const totalCostCents = (ticket.repair_cost_cents || 0) + (ticket.partner_cost_cents || 0);
+---
+
+<AdminLayout title={`Phiếu sửa chữa ${ticket.ticket_code}`} active="repairs">
+  <div class="mx-auto max-w-5xl space-y-6">
+    <!-- Breadcrumb & Top Bar -->
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div class="flex items-center gap-2">
+        <a href="/admin/repairs" class="text-xs font-semibold text-zinc-500 hover:text-zinc-800">
+          ← Danh sách phiếu sửa
+        </a>
+        <span class="text-zinc-300">/</span>
+        <span class="font-mono text-xs font-bold text-zinc-700">{ticket.ticket_code}</span>
+      </div>
+
+      <!-- Action buttons at the top -->
+      <div class="flex flex-wrap items-center gap-2">
+        <!-- NÚT IN PHIẾU TIẾP NHẬN -->
+        <a
+          href={`/admin/repairs/${ticket.id}/print`}
+          target="_blank"
+          class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3.5 py-1.5 text-xs font-bold text-zinc-800 shadow-sm hover:bg-zinc-50 hover:text-zinc-950 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
+        >
+          <svg class="h-4 w-4 text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+          </svg>
+          🖨️ In phiếu tiếp nhận
+        </a>
+
+        {ticket.status !== 'COMPLETED' && (
+          ticket.owner_type === 'CUSTOMER' ? (
+            <button
+              type="button"
+              onclick="document.getElementById('posPaymentModal')?.showModal()"
+              class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 ring-2 ring-emerald-500/20"
+            >
+              💵 Thu tiền & Giao máy (POS)
+            </button>
+          ) : (
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`} class="inline">
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="COMPLETED" />
+              <input type="hidden" name="event_note" value="Nghiệm thu hoàn tất quy trình và nhập lại kho KGAME" />
+              <button
+                type="submit"
+                onclick="return confirm('Xác nhận hoàn tất và nhập máy lại kho KGAME?')"
+                class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700"
+              >
+                ✓ Nghiệm thu & Nhập kho
+              </button>
+            </form>
+          )
+        )}
+      </div>
+    </div>
+
+    {success && (
+      <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-800 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span>✓</span>
+          <span>
+            {success === 'paid_completed'
+              ? 'Thanh toán và bàn giao máy thành công! Giao dịch thu tiền đã được tự động hạch toán vào Sổ Quỹ.'
+              : success === 'status_changed'
+              ? 'Cập nhật tiến trình trạng thái phiếu thành công!'
+              : success === 'item_added'
+              ? 'Đã xuất linh kiện kho và thêm vào phiếu sửa chữa!'
+              : 'Thao tác cập nhật thành công!'}
+          </span>
+        </div>
+        {success === 'paid_completed' && (
+          <a href="/admin/cash" class="text-xs font-bold text-emerald-900 underline hover:text-emerald-700">
+            Xem Sổ Quỹ ngay →
+          </a>
+        )}
+      </div>
+    )}
+
+    {error && (
+      <div class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-800">
+        ⚠️ {error}
+      </div>
+    )}
+
+    <!-- Ticket Summary Banner -->
+    <div class="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
+      <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div class="flex items-center gap-2.5 flex-wrap">
+            <h1 class="text-2xl font-bold text-zinc-900">{ticket.ticket_code}</h1>
+            {ticket.owner_type === 'CUSTOMER' ? (
+              <span class="rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-medium text-sky-800 border border-sky-300">
+                Hàng của Khách hàng
+              </span>
+            ) : (
+              <span class="rounded-full bg-purple-100 px-2.5 py-0.5 text-xs font-medium text-purple-800 border border-purple-300">
+                Hàng nội bộ KGAME
+              </span>
+            )}
+            <span class="rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-normal text-zinc-700">
+              {ticket.repair_location === 'INTERNAL' ? '🏠 Sửa nội bộ' : `🚚 Gửi ngoài: ${ticket.external_partner || 'Đối tác'}`}
+            </span>
+            <span class="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-900 border border-amber-300">
+              Trạng thái: {allStatusLabels[ticket.status] || ticket.status}
+            </span>
+          </div>
+
+          <p class="mt-2 text-base font-semibold text-zinc-900">
+            {ticket.product_name ? `${ticket.product_name} (${ticket.product_type_name || ''})` : ticket.unidentified_product_name || 'Thiết bị tiếp nhận'}
+          </p>
+
+          <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-500">
+            {ticket.program_code && (
+              <span class="font-normal text-[12.5px] text-amber-900 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                🔑 Mã bộ: {ticket.program_code}
+              </span>
+            )}
+            {ticket.customer_name && (
+              <span>Khách: <strong class="text-zinc-800">{ticket.customer_name}</strong> {ticket.customer_phone ? `(${ticket.customer_phone})` : ''}</span>
+            )}
+            {ticket.customer_address && (
+              <span>Đ/c: <span class="text-zinc-700">{ticket.customer_address}</span></span>
+            )}
+            <span>Tiếp nhận lúc: <strong class="text-zinc-800">{formatDateTime(ticket.created_at)}</strong></span>
+            {ticket.assigned_to && (
+              <span>Kỹ thuật: <strong class="text-zinc-800">{ticket.assigned_to}</strong></span>
+            )}
+          </div>
+        </div>
+
+        <div class="text-right sm:border-l sm:border-zinc-200 sm:pl-6">
+          <div class="text-xs text-zinc-500">Giá báo khách</div>
+          <div class="text-2xl font-normal tabular-nums text-emerald-600">{formatVND(ticket.repair_price_cents)}</div>
+          <div class="mt-1 text-xs text-zinc-400">
+            Chi phí vốn: <span class="font-normal tabular-nums text-zinc-700">{formatVND(totalCostCents)}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pipeline Stepper Trực quan -->
+      <div class="mt-6 border-t border-zinc-100 pt-5">
+        <div class="flex items-center justify-between mb-3">
+          <div class="text-xs font-bold uppercase tracking-wider text-zinc-600">
+            Tiến độ quy trình xử lý
+          </div>
+          <span class="text-xs text-zinc-400">
+            Bước hiện tại: <strong class="text-zinc-900">{allStatusLabels[ticket.status] || ticket.status}</strong>
+          </span>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+          {steps.map((s, idx) => {
+            const isCurrent = s.key === ticket.status;
+            const isPast = currentStepIdx > -1 && idx < currentStepIdx;
+
+            return (
+              <div
+                class={`flex flex-col justify-between rounded-lg border p-2.5 text-center transition-all ${
+                  isCurrent
+                    ? 'border-indigo-600 bg-indigo-50/80 ring-2 ring-indigo-500/20 shadow-sm'
+                    : isPast
+                    ? 'border-emerald-200 bg-emerald-50/60 text-emerald-900'
+                    : 'border-zinc-200 bg-zinc-50/50 text-zinc-400'
+                }`}
+              >
+                <span class={`text-xs font-bold ${isCurrent ? 'text-indigo-950 font-extrabold' : isPast ? 'text-emerald-950' : 'text-zinc-500'}`}>
+                  {s.label}
+                </span>
+                <span class={`text-[10px] mt-1 font-semibold ${isCurrent ? 'text-indigo-700' : isPast ? 'text-emerald-700' : 'text-zinc-400'}`}>
+                  {isCurrent ? '● Đang xử lý' : isPast ? '✓ Đã xong' : '○ Chờ đến lượt'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+
+    <!-- ĐIỀU PHỐI CHUYỂN BƯỚC XỬ LÝ (RÕ RÀNG, ĐẦY ĐỦ CHO TẤT CẢ TRẠNG THÁI) -->
+    <div class="rounded-xl border border-zinc-300 bg-white p-5 shadow-sm">
+      <div class="border-b border-zinc-100 pb-3 mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div>
+          <h2 class="text-sm font-bold text-zinc-900 uppercase tracking-wide flex items-center gap-2">
+            ⚡ Thao tác chuyển bước tiến độ tiếp theo
+          </h2>
+          <p class="text-xs text-zinc-500 mt-0.5">
+            Bấm nút bên dưới để cập nhật nhanh tiến trình sửa chữa theo từng mốc.
+          </p>
+        </div>
+        <span class="inline-flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-md border border-indigo-200">
+          Hiện tại: {allStatusLabels[ticket.status] || ticket.status}
+        </span>
+      </div>
+
+      <!-- CÁC NÚT BẤM CHO TỪNG TRẠNG THÁI CỤ THỂ -->
+      <div class="flex flex-wrap items-center gap-2.5">
+        {/* KHI Ở TIẾP NHẬN MỚI */}
+        {ticket.status === 'RECEIVED' && (
+          <>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="DIAGNOSING" />
+              <input type="hidden" name="event_note" value="Bắt đầu kiểm tra kỹ thuật và chẩn đoán lỗi" />
+              <button type="submit" class="rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-blue-700">
+                → Bắt đầu kiểm tra lỗi (DIAGNOSING)
+              </button>
+            </form>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="REPAIRING" />
+              <input type="hidden" name="event_note" value="Tiến hành sửa chữa nội bộ ngay" />
+              <button type="submit" class="rounded-lg bg-orange-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-orange-700">
+                → Tiến hành sửa nội bộ ngay (REPAIRING)
+              </button>
+            </form>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="SENT_TO_PARTNER" />
+              <input type="hidden" name="event_note" value="Gửi thiết bị sang đối tác ngoài sửa" />
+              <button type="submit" class="rounded-lg bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-rose-700">
+                🚚 Gửi đối tác ngoài (SENT_TO_PARTNER)
+              </button>
+            </form>
+          </>
+        )}
+
+        {/* KHI ĐANG KIỂM TRA LỖI */}
+        {ticket.status === 'DIAGNOSING' && (
+          <>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="QUOTED" />
+              <input type="hidden" name="event_note" value="Đã kiểm tra xong và thông báo giá cho khách hàng" />
+              <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-indigo-700">
+                📞 Đã báo giá cho khách (QUOTED)
+              </button>
+            </form>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="REPAIRING" />
+              <input type="hidden" name="event_note" value="Khách đồng ý, bắt đầu sửa chữa nội bộ" />
+              <button type="submit" class="rounded-lg bg-orange-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-orange-700">
+                ✓ Khách duyệt giá → Bắt đầu sửa nội bộ (REPAIRING)
+              </button>
+            </form>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="SENT_TO_PARTNER" />
+              <input type="hidden" name="event_note" value="Chuyển gửi đối tác ngoài xử lý" />
+              <button type="submit" class="rounded-lg bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-rose-700">
+                🚚 Gửi đối tác ngoài sửa (SENT_TO_PARTNER)
+              </button>
+            </form>
+          </>
+        )}
+
+        {/* KHI ĐÃ BÁO GIÁ (QUOTED) */}
+        {ticket.status === 'QUOTED' && (
+          <>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="REPAIRING" />
+              <input type="hidden" name="event_note" value="Khách hàng đã đồng ý giá, tiến hành sửa chữa nội bộ" />
+              <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700">
+                ✓ Khách đồng ý giá → Bắt đầu sửa nội bộ (REPAIRING)
+              </button>
+            </form>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="SENT_TO_PARTNER" />
+              <input type="hidden" name="event_note" value="Khách đồng ý giá, gửi đối tác ngoài thực hiện sửa chữa" />
+              <button type="submit" class="rounded-lg bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-rose-700">
+                🚚 Khách duyệt giá → Gửi đối tác ngoài (SENT_TO_PARTNER)
+              </button>
+            </form>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="CANCELLED" />
+              <input type="hidden" name="event_note" value="Khách không đồng ý giá, hủy sửa và trả lại nguyên trạng" />
+              <button type="submit" onclick="return confirm('Khách từ chối sửa, xác nhận hủy phiếu?')" class="rounded-lg border border-red-300 bg-red-50 px-3.5 py-2 text-xs font-bold text-red-700 hover:bg-red-100">
+                ✗ Khách không sửa → Hủy phiếu (CANCELLED)
+              </button>
+            </form>
+          </>
+        )}
+
+        {/* KHI ĐÃ DUYỆT GIÁ (APPROVED) */}
+        {ticket.status === 'APPROVED' && (
+          <>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="REPAIRING" />
+              <input type="hidden" name="event_note" value="Bắt đầu sửa chữa nội bộ" />
+              <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700">
+                ✓ Bắt đầu sửa nội bộ (REPAIRING)
+              </button>
+            </form>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="SENT_TO_PARTNER" />
+              <input type="hidden" name="event_note" value="Gửi đối tác ngoài sửa" />
+              <button type="submit" class="rounded-lg bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-rose-700">
+                🚚 Gửi đối tác ngoài (SENT_TO_PARTNER)
+              </button>
+            </form>
+          </>
+        )}
+
+        {/* KHI ĐANG SỬA NỘI BỘ (REPAIRING) */}
+        {ticket.status === 'REPAIRING' && (
+          <>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="TESTING" />
+              <input type="hidden" name="event_note" value="Đã sửa xong linh kiện, chuyển sang chạy test thực tế" />
+              <button type="submit" class="rounded-lg bg-cyan-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-cyan-700">
+                → Đã sửa xong, chuyển sang chạy Test (TESTING)
+              </button>
+            </form>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="SENT_TO_PARTNER" />
+              <input type="hidden" name="event_note" value="Phát sinh lỗi bo mạch phức tạp, chuyển gửi đối tác ngoài xử lý" />
+              <button type="submit" class="rounded-lg border border-rose-300 bg-rose-50 px-3.5 py-2 text-xs font-bold text-rose-700 hover:bg-rose-100">
+                🚚 Chuyển gửi đối tác ngoài xử lý (SENT_TO_PARTNER)
+              </button>
+            </form>
+          </>
+        )}
+
+        {/* KHI ĐANG GỬI ĐỐI TÁC NGOÀI (SENT_TO_PARTNER) */}
+        {ticket.status === 'SENT_TO_PARTNER' && (
+          <>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="TESTING" />
+              <input type="hidden" name="event_note" value="Đã nhận máy về từ đối tác ngoài, bắt đầu chạy Test nghiệm thu" />
+              <button type="submit" class="rounded-lg bg-cyan-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-cyan-700">
+                ✓ Đã nhận máy về từ đối tác → Chạy Test (TESTING)
+              </button>
+            </form>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="REPAIRING" />
+              <input type="hidden" name="event_note" value="Nhận máy về sửa tiếp nội bộ" />
+              <button type="submit" class="rounded-lg border border-zinc-300 bg-zinc-50 px-3.5 py-2 text-xs font-bold text-zinc-700 hover:bg-zinc-100">
+                🏠 Nhận máy về sửa tiếp nội bộ (REPAIRING)
+              </button>
+            </form>
+          </>
+        )}
+
+        {/* KHI ĐANG TEST (TESTING) */}
+        {ticket.status === 'TESTING' && (
+          <>
+            {ticket.owner_type === 'CUSTOMER' ? (
+              <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+                <input type="hidden" name="action" value="transition_status" />
+                <input type="hidden" name="new_status" value="READY_FOR_RETURN" />
+                <input type="hidden" name="event_note" value="Test đạt chuẩn, sẵn sàng giao trả máy cho khách hàng" />
+                <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700">
+                  ✓ Test đạt chuẩn → Chờ trả khách (READY_FOR_RETURN)
+                </button>
+              </form>
+            ) : (
+              <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+                <input type="hidden" name="action" value="transition_status" />
+                <input type="hidden" name="new_status" value="COMPLETED" />
+                <input type="hidden" name="event_note" value="Test đạt chuẩn, nhập lại kho KGAME sẵn sàng bán" />
+                <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700">
+                  ✓ Test đạt chuẩn → Nhập lại kho KGAME (COMPLETED)
+                </button>
+              </form>
+            )}
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="REPAIRING" />
+              <input type="hidden" name="event_note" value="Test chưa đạt hoặc chập chờn, chuyển lại sửa chữa" />
+              <button type="submit" class="rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2 text-xs font-bold text-amber-800 hover:bg-amber-100">
+                ⚠️ Test chưa đạt → Sửa lại (REPAIRING)
+              </button>
+            </form>
+          </>
+        )}
+
+        {/* KHI ĐÃ SẴN SÀNG TRẢ KHÁCH (READY_FOR_RETURN) */}
+        {ticket.status === 'READY_FOR_RETURN' && (
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onclick="document.getElementById('posPaymentModal')?.showModal()"
+              class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-xs font-extrabold text-white shadow-md hover:bg-emerald-700 ring-2 ring-emerald-500/30"
+            >
+              💵 Thu tiền & Giao máy (POS)
+            </button>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`} class="inline">
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="COMPLETED" />
+              <input type="hidden" name="event_note" value="Bàn giao máy hoàn tất (đã thu tiền trước / bảo hành 0đ)" />
+              <button
+                type="submit"
+                onclick="return confirm('Xác nhận bàn giao máy mà không thu thêm tiền?')"
+                class="rounded-lg border border-zinc-300 bg-zinc-50 px-3.5 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-100"
+              >
+                Giao máy không thu tiền (Đã trả trước / Bảo hành 0đ)
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* KHI ĐÃ HOÀN TẤT HOẶC HỦY */}
+        {(ticket.status === 'COMPLETED' || ticket.status === 'CANCELLED') && (
+          <div class="flex items-center gap-3">
+            <span class="text-xs font-semibold text-zinc-500">
+              Phiếu này đã ở trạng thái kết thúc ({allStatusLabels[ticket.status]}).
+            </span>
+            <form method="POST" action={`/api/admin/repairs/${ticket.id}`}>
+              <input type="hidden" name="action" value="transition_status" />
+              <input type="hidden" name="new_status" value="REPAIRING" />
+              <input type="hidden" name="event_note" value="Mở lại phiếu sửa chữa theo yêu cầu bảo hành" />
+              <button type="submit" class="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50">
+                ↩ Mở lại phiếu để sửa tiếp
+              </button>
+            </form>
+          </div>
+        )}
+      </div>
+
+      <!-- ĐIỀU CHỈNH TRẠNG THÁI TÙY CHỌN (UNIVERSAL OVERRIDE ĐẢM BẢO KHÔNG BAO GIỜ BỊ KẸT) -->
+      <div class="mt-4 pt-3 border-t border-zinc-100">
+        <details class="text-xs">
+          <summary class="cursor-pointer font-semibold text-zinc-500 hover:text-zinc-800">
+            ⚙️ Hoặc chọn chuyển sang bất kỳ trạng thái nào khác (Mở rộng)
+          </summary>
+          <form method="POST" action={`/api/admin/repairs/${ticket.id}`} class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 items-center bg-zinc-50 p-3 rounded-lg border border-zinc-200">
+            <input type="hidden" name="action" value="transition_status" />
+            <div>
+              <label class="block text-[11px] font-bold text-zinc-600 mb-1">Chọn trạng thái cần đổi:</label>
+              <select name="new_status" class="w-full rounded border border-zinc-300 bg-white px-2 py-1.5 text-xs font-semibold">
+                {Object.entries(allStatusLabels).map(([key, label]) => (
+                  <option value={key} selected={key === ticket.status}>
+                    {label} ({key})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label class="block text-[11px] font-bold text-zinc-600 mb-1">Ghi chú sự kiện:</label>
+              <input
+                type="text"
+                name="event_note"
+                placeholder="VD: Cập nhật theo yêu cầu..."
+                class="w-full rounded border border-zinc-300 bg-white px-2 py-1.5 text-xs"
+              />
+            </div>
+            <div class="pt-4">
+              <button type="submit" class="w-full rounded bg-zinc-800 px-3 py-1.5 text-xs font-bold text-white hover:bg-zinc-900">
+                Cập nhật trạng thái ngay
+              </button>
+            </div>
+          </form>
+        </details>
+      </div>
+    </div>
+
+    <!-- Main Content 2 Columns -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- Left Column (2 Cols wide) -->
+      <div class="lg:col-span-2 space-y-6">
+        <!-- 1. Phương án xử lý: Sửa nội bộ VS Gửi đối tác -->
+        <div class="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-base font-bold text-zinc-900 flex items-center gap-2">
+              🛠️ Điều phối & Phương thức xử lý
+            </h2>
+            <span class={`rounded-full px-2.5 py-0.5 text-xs font-bold ${ticket.repair_location === 'INTERNAL' ? 'bg-amber-100 text-amber-900' : 'bg-rose-100 text-rose-900'}`}>
+              {ticket.repair_location === 'INTERNAL' ? 'Sửa nội bộ' : 'Gửi đối tác ngoài'}
+            </span>
+          </div>
+
+          <!-- Section Gửi đối tác nếu có -->
+          {ticket.repair_location === 'EXTERNAL' ? (
+            <div class="rounded-lg border border-rose-200 bg-rose-50/40 p-4 mb-4">
+              <div class="font-bold text-xs text-rose-950 uppercase mb-2">Thông tin theo dõi đối tác nhận sửa:</div>
+              <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                <div>
+                  <span class="text-zinc-500">Đối tác nhận sửa:</span>
+                  <div class="font-bold text-zinc-900">{ticket.external_partner || 'Chưa cập nhật'}</div>
+                </div>
+                <div>
+                  <span class="text-zinc-500">Ngày gửi đi:</span>
+                  <div class="font-medium text-zinc-900">{formatDate(ticket.sent_partner_at)}</div>
+                </div>
+                <div>
+                  <span class="text-zinc-500">Ngày hẹn nhận:</span>
+                  <div class="font-bold text-rose-700">{formatDate(ticket.expected_receive_at)}</div>
+                </div>
+                <div>
+                  <span class="text-zinc-500">Ngày nhận thực tế:</span>
+                  <div class="font-bold text-emerald-700">{formatDate(ticket.actual_received_at)}</div>
+                </div>
+                <div>
+                  <span class="text-zinc-500">Chi phí đối tác:</span>
+                  <div class="font-mono font-bold text-zinc-900">{formatVND(ticket.partner_cost_cents)}</div>
+                </div>
+                <div>
+                  <span class="text-zinc-500">Trạng thái nhận:</span>
+                  <div class="font-semibold">
+                    {ticket.actual_received_at ? (
+                      <span class="text-emerald-700">✓ Đã nhận về</span>
+                    ) : (
+                      <span class="text-amber-700">⏳ Chờ nhận về</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {!ticket.actual_received_at && (
+                <form method="POST" action={`/api/admin/repairs/${ticket.id}`} class="mt-4 border-t border-rose-200 pt-3 flex items-center justify-between">
+                  <input type="hidden" name="action" value="update_details" />
+                  <input type="hidden" name="actual_received_at" value={new Date().toISOString().split('T')[0]} />
+                  <span class="text-xs text-rose-900 font-medium">Đối tác đã sửa xong và gửi lại máy?</span>
+                  <button type="submit" class="rounded-lg bg-rose-600 px-3 py-1 text-xs font-bold text-white hover:bg-rose-700">
+                    ✓ Đánh dấu đã nhận về hôm nay
+                  </button>
+                </form>
+              )}
+            </div>
+          ) : (
+            <div class="mb-4 rounded-lg bg-amber-50/50 p-3 text-xs text-amber-900 border border-amber-200">
+              🏠 Thiết bị đang được xử lý nội bộ tại xưởng KGAME.
+            </div>
+          )}
+
+          <!-- Linh kiện thay thế đã xuất kho (REPAIR_USE) -->
+          <div class="border-t border-zinc-100 pt-4">
+            <h3 class="text-sm font-bold text-zinc-900 mb-3 flex items-center justify-between">
+              <span>Linh kiện thay thế xuất kho (Sổ kho: REPAIR_USE)</span>
+              <span class="font-mono text-xs font-semibold text-zinc-500">Tổng linh kiện: {formatVND(ticket.repair_cost_cents)}</span>
+            </h3>
+
+            {items.length === 0 ? (
+              <p class="text-xs text-zinc-400 italic py-2">Chưa xuất linh kiện thay thế nào từ kho.</p>
+            ) : (
+              <div class="overflow-x-auto rounded-lg border border-zinc-200 mb-4">
+                <table class="min-w-full divide-y divide-zinc-200 text-left text-xs">
+                  <thead class="bg-zinc-50 font-semibold text-zinc-600">
+                    <tr>
+                      <th class="px-3 py-2">Mã & Tên linh kiện</th>
+                      <th class="px-3 py-2 text-center">SL</th>
+                      <th class="px-3 py-2 text-right">Giá vốn</th>
+                      <th class="px-3 py-2 text-right">Thành tiền</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-zinc-100 font-mono">
+                    {items.map((it: any) => (
+                      <tr>
+                        <td class="px-3 py-2 font-sans font-medium text-zinc-800">
+                          {it.product_name} {it.product_type_name ? `(${it.product_type_name})` : ''}
+                        </td>
+                        <td class="px-3 py-2 text-center font-bold text-zinc-900">{it.quantity}</td>
+                        <td class="px-3 py-2 text-right text-zinc-600">{formatVND(it.unit_cost_cents)}</td>
+                        <td class="px-3 py-2 text-right font-bold text-zinc-900">{formatVND(it.quantity * it.unit_cost_cents)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <!-- Form xuất thêm linh kiện từ kho -->
+            {ticket.status !== 'COMPLETED' && (
+              <form method="POST" action={`/api/admin/repairs/${ticket.id}`} class="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 p-3 space-y-3">
+                <input type="hidden" name="action" value="add_item" />
+                <div class="font-bold text-xs text-zinc-800">+ Xuất thêm linh kiện từ kho thay thế:</div>
+                <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                  <div class="sm:col-span-2">
+                    <select name="product_id" required class="w-full rounded border border-zinc-300 px-2 py-1.5 text-xs bg-white focus:outline-none">
+                      <option value="">-- Chọn linh kiện trong kho --</option>
+                      {(spareParts ?? []).map((p) => (
+                        <option value={p.product_id} data-cost={p.cost_price_cents}>
+                          {p.product_name} (Tồn: {p.stock})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <input
+                      type="number"
+                      name="quantity"
+                      min="1"
+                      value="1"
+                      placeholder="SL"
+                      class="w-full rounded border border-zinc-300 px-2 py-1.5 text-xs text-center bg-white"
+                    />
+                  </div>
+                  <div>
+                    <button type="submit" class="w-full rounded bg-zinc-900 px-3 py-1.5 text-xs font-bold text-white hover:bg-zinc-800">
+                      Xuất kho
+                    </button>
+                  </div>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+
+        <!-- 2. Bảo trì Chu kỳ Kỹ thuật / Key (Role Kỹ thuật/Sản xuất & Admin) -->
+        {ticket.program_code && isSelfProduced && (
+          <div class="rounded-xl border border-amber-300 bg-amber-50/30 p-6 shadow-sm">
+            <div class="flex items-center justify-between mb-2">
+              <h2 class="text-base font-bold text-amber-950 flex items-center gap-2">
+                🔑 Bảo trì chu kỳ kỹ thuật thiết bị
+              </h2>
+              <span class="rounded bg-amber-200 px-2 py-0.5 text-[11px] font-mono font-bold text-amber-900">
+                {ticket.program_code}
+              </span>
+            </div>
+
+            <p class="text-xs text-amber-800 mb-4">
+              Thiết bị do KGAME sản xuất. Trong quá trình bảo dưỡng, kỹ thuật viên có quyền cập nhật lại thời hạn hoạt động định kỳ của bo mạch.
+            </p>
+
+            <div class="grid grid-cols-2 gap-4 text-xs mb-4 p-3 bg-white rounded-lg border border-amber-200">
+              <div>
+                <span class="text-zinc-500">Hạn hiện tại của máy:</span>
+                <div class="font-mono font-bold text-zinc-900">{formatDate(ticket.unit_current_expiry_date) || 'Không giới hạn'}</div>
+              </div>
+              <div>
+                <span class="text-zinc-500">Trạng thái bảo trì:</span>
+                <div class="font-semibold">
+                  {ticket.is_key_serviced ? (
+                    <span class="text-emerald-600 font-bold">✓ Đã gia hạn chu kỳ ({formatDate(ticket.new_expiry_date)})</span>
+                  ) : (
+                    <span class="text-zinc-600">Chưa cập nhật trong phiếu này</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {ticket.status !== 'COMPLETED' && (
+              <form method="POST" action={`/api/admin/repairs/${ticket.id}`} class="border-t border-amber-200 pt-3">
+                <input type="hidden" name="action" value="transition_status" />
+                <input type="hidden" name="new_status" value={ticket.status} />
+                <input type="hidden" name="service_key" value="1" />
+                <input type="hidden" name="event_note" value="Cập nhật chu kỳ bảo trì kỹ thuật cho bo mạch" />
+
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                  <div>
+                    <label class="block text-[11px] font-semibold text-zinc-700">Ngày hết hạn chu kỳ mới</label>
+                    <input
+                      type="date"
+                      name="new_expiry_date"
+                      required
+                      value={new Date(Date.now() + 400 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}
+                      class="mt-1 w-full rounded border border-amber-300 bg-white px-2 py-1.5 text-xs font-mono font-bold text-zinc-900 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label class="block text-[11px] font-semibold text-zinc-700">Số ngày chu kỳ mới (tham khảo)</label>
+                    <input
+                      type="number"
+                      name="new_expiry_days"
+                      value="400"
+                      class="mt-1 w-full rounded border border-amber-300 bg-white px-2 py-1.5 text-xs font-mono text-zinc-900"
+                    />
+                  </div>
+
+                  <div>
+                    <button
+                      type="submit"
+                      class="w-full rounded bg-amber-800 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-900"
+                    >
+                      ✓ Xác nhận chu kỳ mới
+                    </button>
+                  </div>
+                </div>
+              </form>
+            )}
+          </div>
+        )}
+
+        <!-- 3. Sổ Quỹ & Thu / Chi thực tế của phiếu -->
+        <div class="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-base font-bold text-zinc-900 flex items-center gap-2">
+              💵 Sổ Quỹ & Thu / Chi thực tế
+            </h2>
+            <a href="/admin/cash" class="text-xs font-semibold text-emerald-700 hover:underline">
+              Mở Sổ Quỹ →
+            </a>
+          </div>
+
+          {cashTransactions.length === 0 ? (
+            <div class="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 p-4 text-center">
+              <p class="text-xs text-zinc-500">Chưa có giao dịch Sổ Quỹ nào được ghi nhận cho phiếu này.</p>
+              {ticket.status !== 'COMPLETED' && ticket.owner_type === 'CUSTOMER' && (
+                <button
+                  type="button"
+                  onclick="document.getElementById('posPaymentModal')?.showModal()"
+                  class="mt-2.5 inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700"
+                >
+                  💵 Mở màn hình Thu tiền POS
+                </button>
+              )}
+            </div>
+          ) : (
+            <div class="space-y-4">
+              <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <div class="rounded-lg bg-emerald-50 p-3 border border-emerald-200">
+                  <div class="text-[11px] font-medium text-emerald-800">Tổng đã thu từ khách</div>
+                  <div class="text-base font-normal tabular-nums text-emerald-700 mt-0.5">{formatVND(totalCollected)}</div>
+                </div>
+                <div class="rounded-lg bg-rose-50 p-3 border border-rose-200">
+                  <div class="text-[11px] font-medium text-rose-800">Đã chi cho đối tác</div>
+                  <div class="text-base font-normal tabular-nums text-rose-700 mt-0.5">{formatVND(totalPaidOut)}</div>
+                </div>
+                <div class="rounded-lg bg-zinc-50 p-3 border border-zinc-200 col-span-2 sm:col-span-1">
+                  <div class="text-[11px] font-medium text-zinc-600">Thực thu ròng</div>
+                  <div class="text-base font-normal tabular-nums text-zinc-900 mt-0.5">{formatVND(totalCollected - totalPaidOut)}</div>
+                </div>
+              </div>
+
+              <div class="divide-y divide-zinc-100 border rounded-lg border-zinc-200 overflow-hidden">
+                {cashTransactions.map((tx: any) => (
+                  <div class="flex items-center justify-between p-3 text-xs bg-white hover:bg-zinc-50 transition-colors">
+                    <div class="flex items-center gap-2.5">
+                      <span class={`font-normal px-2 py-0.5 rounded text-[11.5px] ${
+                        tx.flow_type === 'IN' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-rose-100 text-rose-800 border border-rose-200'
+                      }`}>
+                        {tx.transaction_code}
+                      </span>
+                      <div>
+                        <div class="font-normal text-zinc-800">
+                          {tx.flow_type === 'IN' ? 'Thu tiền sửa chữa' : 'Chi trả đối tác'}
+                          <span class="ml-1.5 font-normal text-zinc-500">
+                            ({tx.account_type === 'CASH' ? 'Tiền mặt' : `Chuyển khoản: ${tx.bank_name || 'Ngân hàng'}`})
+                          </span>
+                        </div>
+                        <div class="text-[11px] text-zinc-400">
+                          {formatDateTime(tx.created_at)} • Lập bởi: {tx.created_by || 'Hệ thống'}
+                        </div>
+                      </div>
+                    </div>
+                    <div class={`font-normal tabular-nums text-sm ${tx.flow_type === 'IN' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                      {tx.flow_type === 'IN' ? '+' : '-'}{formatVND(tx.amount_cents)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <!-- 4. Nhật ký sự kiện & Lịch sử xử lý -->
+        <div class="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
+          <h2 class="text-base font-bold text-zinc-900 mb-4 flex items-center gap-2">
+            📋 Lịch sử tiến trình & Sự kiện
+          </h2>
+
+          <div class="space-y-4">
+            {events.map((ev: any) => (
+              <div class="relative flex items-start gap-3 pl-4">
+                <div class="absolute left-0 top-1.5 h-2 w-2 rounded-full bg-zinc-400"></div>
+                <div class="flex-1">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-zinc-900">{ev.event_type}</span>
+                    <span class="font-mono text-[11px] text-zinc-400">{formatDateTime(ev.created_at)}</span>
+                  </div>
+                  <p class="text-xs text-zinc-600 mt-0.5">{ev.note}</p>
+                  {ev.created_by && (
+                    <span class="text-[10px] text-zinc-400">Thực hiện bởi: {ev.created_by}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column (Details & Edit Form) -->
+      <div class="space-y-6">
+        <!-- Thông tin tiếp nhận ban đầu -->
+        <div class="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm space-y-4 text-xs">
+          <h2 class="text-sm font-bold text-zinc-900 border-b border-zinc-100 pb-2">
+            Thông tin tiếp nhận
+          </h2>
+
+          <div>
+            <span class="text-zinc-500 font-semibold block">Khách hàng:</span>
+            <div class="mt-1 text-zinc-800 font-bold">
+              {ticket.customer_name || 'Khách vãng lai'}
+              {ticket.customer_phone && <span class="font-mono font-normal text-zinc-600"> ({ticket.customer_phone})</span>}
+            </div>
+            {ticket.customer_address && (
+              <div class="text-[11px] text-zinc-500 mt-0.5">
+                {ticket.customer_address}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <span class="text-zinc-500 font-semibold block">Lỗi khách báo:</span>
+            <div class="mt-1 rounded bg-zinc-50 p-2 text-zinc-800 border border-zinc-200">
+              {ticket.problem_reported}
+            </div>
+          </div>
+
+          <div>
+            <span class="text-zinc-500 font-semibold block">Phụ kiện nhận kèm:</span>
+            <div class="mt-1 text-zinc-800">
+              {ticket.accessories_received || 'Không có phụ kiện kèm theo'}
+            </div>
+          </div>
+
+          <div>
+            <span class="text-zinc-500 font-semibold block">Chẩn đoán kỹ thuật:</span>
+            <div class="mt-1 text-zinc-800">
+              {ticket.diagnosis || 'Chưa cập nhật chẩn đoán'}
+            </div>
+          </div>
+
+          <div class="pt-2 border-t border-zinc-100 grid grid-cols-2 gap-2">
+            <div>
+              <span class="text-zinc-500">Hẹn trả khách:</span>
+              <div class="font-medium text-zinc-900">{formatDate(ticket.expected_return_at)}</div>
+            </div>
+            <div>
+              <span class="text-zinc-500">Ngày trả thực tế:</span>
+              <div class="font-medium text-zinc-900">{formatDate(ticket.returned_at)}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Form cập nhật thông tin chẩn đoán, đối tác và báo giá -->
+        {ticket.status !== 'COMPLETED' && (
+          <form method="POST" action={`/api/admin/repairs/${ticket.id}`} class="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm space-y-4">
+            <input type="hidden" name="action" value="update_details" />
+            <h2 class="text-sm font-bold text-zinc-900 border-b border-zinc-100 pb-2">
+              Cập nhật thông tin phiếu
+            </h2>
+
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">Chẩn đoán của kỹ thuật</label>
+              <textarea
+                name="diagnosis"
+                rows="2"
+                class="mt-1 w-full rounded border border-zinc-300 p-2 text-xs focus:outline-none"
+              >{ticket.diagnosis || ''}</textarea>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">Nơi sửa chữa</label>
+              <select name="repair_location" class="mt-1 w-full rounded border border-zinc-300 p-2 text-xs bg-white">
+                <option value="INTERNAL" selected={ticket.repair_location === 'INTERNAL'}>🏠 Sửa nội bộ tại xưởng</option>
+                <option value="EXTERNAL" selected={ticket.repair_location === 'EXTERNAL'}>🚚 Gửi đối tác ngoài</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">Đối tác nhận sửa (nếu gửi ngoài)</label>
+              <input
+                type="text"
+                name="external_partner"
+                value={ticket.external_partner || ''}
+                class="mt-1 w-full rounded border border-zinc-300 p-2 text-xs"
+              />
+            </div>
+
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-xs font-semibold text-zinc-700">Chi phí đối tác (VNĐ)</label>
+                <input
+                  type="text"
+                  name="partner_cost"
+                  value={ticket.partner_cost_cents || 0}
+                  class="mt-1 w-full rounded border border-zinc-300 p-2 text-xs font-mono"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-zinc-700">Giá báo khách (VNĐ)</label>
+                <input
+                  type="text"
+                  name="repair_price"
+                  value={ticket.repair_price_cents || 0}
+                  class="mt-1 w-full rounded border border-zinc-300 p-2 text-xs font-mono font-bold"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">Ngày hẹn trả khách</label>
+              <input
+                type="date"
+                name="expected_return_at"
+                value={ticket.expected_return_at || ''}
+                class="mt-1 w-full rounded border border-zinc-300 p-2 text-xs"
+              />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">Kỹ thuật viên phụ trách</label>
+              <input
+                type="text"
+                name="assigned_to"
+                value={ticket.assigned_to || ''}
+                class="mt-1 w-full rounded border border-zinc-300 p-2 text-xs"
+              />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">Ghi chú nội bộ</label>
+              <textarea
+                name="note"
+                rows="2"
+                class="mt-1 w-full rounded border border-zinc-300 p-2 text-xs focus:outline-none"
+              >{ticket.note || ''}</textarea>
+            </div>
+
+            <button
+              type="submit"
+              class="w-full rounded-lg bg-zinc-900 py-2 text-xs font-bold text-white hover:bg-zinc-800"
+            >
+              Lưu thay đổi thông tin
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL THANH TOÁN POS & BÀN GIAO MÁY (CHUẨN HÓA SỔ QUỸ) -->
+  <dialog
+    id="posPaymentModal"
+    class="backdrop:bg-zinc-950/60 backdrop:backdrop-blur-sm rounded-2xl border border-zinc-200 bg-white p-0 shadow-2xl w-full max-w-lg m-auto overflow-hidden"
+  >
+    <div class="border-b border-zinc-100 bg-gradient-to-r from-emerald-600 to-teal-700 px-6 py-4 text-white">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="text-xl">💵</span>
+          <div>
+            <h3 class="text-base font-bold">Thanh toán & Giao máy cho khách</h3>
+            <p class="text-xs text-emerald-100 font-mono">Phiếu: {ticket.ticket_code}</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onclick="document.getElementById('posPaymentModal')?.close()"
+          class="rounded-full p-1 text-emerald-100 hover:bg-white/10 hover:text-white transition-colors"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+
+    <form method="POST" action={`/api/admin/repairs/${ticket.id}`} class="p-6 space-y-4">
+      <input type="hidden" name="action" value="settle_payment" />
+      <input type="hidden" name="account_type" id="posAccountTypeInput" value="CASH" />
+
+      <!-- Thông tin khách & thiết bị tóm tắt -->
+      <div class="rounded-xl bg-zinc-50 p-3.5 border border-zinc-200 text-xs space-y-1">
+        <div class="flex justify-between">
+          <span class="text-zinc-500">Khách hàng:</span>
+          <span class="font-bold text-zinc-900">{ticket.customer_name || 'Khách vãng lai'} {ticket.customer_phone ? `(${ticket.customer_phone})` : ''}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-zinc-500">Thiết bị:</span>
+          <span class="font-semibold text-zinc-800">{ticket.product_name ? `${ticket.product_name} (${ticket.product_type_name || ''})` : ticket.unidentified_product_name || 'Thiết bị sửa'}</span>
+        </div>
+        {ticket.program_code && (
+          <div class="flex justify-between">
+            <span class="text-zinc-500">Mã chương trình (Key):</span>
+            <span class="font-mono font-bold text-amber-800">{ticket.program_code}</span>
+          </div>
+        )}
+      </div>
+
+      <!-- Số tiền khách thanh toán -->
+      <div>
+        <div class="flex items-center justify-between mb-1">
+          <label class="text-xs font-bold text-zinc-700">Số tiền khách thanh toán (VNĐ)</label>
+          <span class="text-[11px] text-zinc-400">Giá báo: {formatVND(ticket.repair_price_cents)}</span>
+        </div>
+        <div class="relative">
+          <input
+            type="number"
+            name="amount_paid"
+            id="posAmountPaidInput"
+            value={ticket.repair_price_cents || 0}
+            min="0"
+            step="1000"
+            required
+            class="w-full rounded-xl border-2 border-emerald-500 bg-white px-4 py-2.5 font-mono text-xl font-black text-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+          />
+          <span class="absolute right-4 top-3 text-xs font-bold text-zinc-400">VNĐ</span>
+        </div>
+      </div>
+
+      <!-- Phương thức nhận tiền: Tiền mặt vs Chuyển khoản -->
+      <div>
+        <label class="block text-xs font-bold text-zinc-700 mb-2">Hình thức thu tiền vào Sổ Quỹ:</label>
+        <div class="grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            id="btnPayCash"
+            class="flex items-center justify-center gap-2 rounded-xl border-2 border-emerald-600 bg-emerald-50/80 p-3 text-xs font-bold text-emerald-950 shadow-sm transition-all"
+          >
+            <span class="text-lg">💵</span>
+            <span>Tiền mặt (CASH)</span>
+          </button>
+          <button
+            type="button"
+            id="btnPayBank"
+            class="flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white p-3 text-xs font-semibold text-zinc-600 shadow-sm hover:border-zinc-300 transition-all"
+          >
+            <span class="text-lg">🏦</span>
+            <span>Chuyển khoản (BANK)</span>
+          </button>
+        </div>
+
+        <!-- Khung nhập ngân hàng (ẩn khi chọn tiền mặt) -->
+        <div id="bankSelectionBox" class="mt-3 hidden rounded-xl border border-sky-200 bg-sky-50/50 p-3.5 space-y-2.5">
+          <div class="text-[11px] font-bold text-sky-900">Chọn hoặc nhập ngân hàng nhận tiền:</div>
+          <div class="flex flex-wrap gap-1.5">
+            {['Vietcombank', 'MB Bank', 'Techcombank', 'ACB', 'BIDV', 'Agribank', 'VietinBank'].map((bank) => (
+              <button
+                type="button"
+                class="bank-preset-btn rounded-md border border-sky-300 bg-white px-2 py-1 text-[11px] font-semibold text-sky-800 hover:bg-sky-100 transition-colors"
+                data-bank={bank}
+              >
+                {bank}
+              </button>
+            ))}
+          </div>
+          <input
+            type="text"
+            name="bank_name"
+            id="posBankNameInput"
+            placeholder="Tên ngân hàng / Số tài khoản..."
+            value="Vietcombank"
+            class="w-full rounded-lg border border-sky-300 bg-white px-3 py-1.5 text-xs text-zinc-800 focus:outline-none focus:ring-1 focus:ring-sky-500"
+          />
+        </div>
+      </div>
+
+      <!-- Chi trả đối tác ngoài (nếu có chi phí đối tác hoặc gửi ngoài) -->
+      {(ticket.repair_location === 'EXTERNAL' || (ticket.partner_cost_cents || 0) > 0) && (
+        <div class="rounded-xl border border-amber-200 bg-amber-50/50 p-3.5 space-y-2.5">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              name="pay_partner"
+              value="1"
+              id="chkPayPartner"
+              checked={(ticket.partner_cost_cents || 0) > 0}
+              class="h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+            />
+            <span class="text-xs font-bold text-amber-950">
+              Đồng thời chi trả tiền công cho đối tác ngoài ({ticket.external_partner || 'Thợ ngoài'})
+            </span>
+          </label>
+
+          <div id="partnerPayoutDetails" class="grid grid-cols-2 gap-2 pt-1 border-t border-amber-200/60">
+            <div>
+              <label class="block text-[11px] font-semibold text-amber-900 mb-1">Số tiền chi đối tác (VNĐ)</label>
+              <input
+                type="number"
+                name="partner_amount"
+                value={ticket.partner_cost_cents || 0}
+                min="0"
+                step="1000"
+                class="w-full rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 font-mono text-xs font-bold text-zinc-900"
+              />
+            </div>
+            <div>
+              <label class="block text-[11px] font-semibold text-amber-900 mb-1">Nguồn tiền chi</label>
+              <select name="partner_account_type" class="w-full rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-zinc-800">
+                <option value="CASH">💵 Tiền mặt (CASH)</option>
+                <option value="BANK">🏦 Ngân hàng (BANK)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <!-- Ghi chú thu tiền -->
+      <div>
+        <label class="block text-xs font-bold text-zinc-700 mb-1">Ghi chú phiếu thu Sổ Quỹ</label>
+        <input
+          type="text"
+          name="payment_note"
+          value={`Thu tiền sửa chữa phiếu ${ticket.ticket_code} - ${ticket.customer_name || 'Khách hàng'}`}
+          class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-zinc-900"
+        />
+      </div>
+
+      <div class="rounded-lg bg-emerald-50/70 p-2.5 text-[11px] text-emerald-800 border border-emerald-200 flex items-start gap-1.5">
+        <span class="mt-0.5">ℹ️</span>
+        <span>
+          Hệ thống sẽ tự động sinh <strong>Phiếu Thu</strong> hạch toán vào Sổ Quỹ, cập nhật tồn quỹ tức thì và chuyển trạng thái phiếu sang <strong>Hoàn tất (COMPLETED)</strong>.
+        </span>
+      </div>
+
+      <!-- Action buttons -->
+      <div class="flex items-center justify-end gap-2.5 pt-2 border-t border-zinc-100">
+        <button
+          type="button"
+          onclick="document.getElementById('posPaymentModal')?.close()"
+          class="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-xs font-bold text-zinc-700 hover:bg-zinc-50 transition-colors"
+        >
+          Hủy bỏ
+        </button>
+        <button
+          type="submit"
+          class="rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-extrabold text-white shadow-md hover:bg-emerald-700 ring-2 ring-emerald-500/20 transition-all"
+        >
+          ✓ Xác nhận Thu tiền & Giao máy
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- CLIENT SCRIPT CHO POS PAYMENT MODAL -->
+  <script is:inline>
+    (function () {
+      const btnCash = document.getElementById('btnPayCash');
+      const btnBank = document.getElementById('btnPayBank');
+      const inputAccountType = document.getElementById('posAccountTypeInput');
+      const bankSelectionBox = document.getElementById('bankSelectionBox');
+      const bankNameInput = document.getElementById('posBankNameInput');
+      const chkPayPartner = document.getElementById('chkPayPartner');
+      const partnerPayoutDetails = document.getElementById('partnerPayoutDetails');
+
+      function selectCash() {
+        if (!btnCash || !btnBank || !inputAccountType || !bankSelectionBox) return;
+        inputAccountType.value = 'CASH';
+        btnCash.className = 'flex items-center justify-center gap-2 rounded-xl border-2 border-emerald-600 bg-emerald-50/80 p-3 text-xs font-bold text-emerald-950 shadow-sm transition-all';
+        btnBank.className = 'flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white p-3 text-xs font-semibold text-zinc-600 shadow-sm hover:border-zinc-300 transition-all';
+        bankSelectionBox.classList.add('hidden');
+      }
+
+      function selectBank() {
+        if (!btnCash || !btnBank || !inputAccountType || !bankSelectionBox) return;
+        inputAccountType.value = 'BANK';
+        btnBank.className = 'flex items-center justify-center gap-2 rounded-xl border-2 border-sky-600 bg-sky-50/80 p-3 text-xs font-bold text-sky-950 shadow-sm transition-all';
+        btnCash.className = 'flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white p-3 text-xs font-semibold text-zinc-600 shadow-sm hover:border-zinc-300 transition-all';
+        bankSelectionBox.classList.remove('hidden');
+      }
+
+      btnCash?.addEventListener('click', selectCash);
+      btnBank?.addEventListener('click', selectBank);
+
+      // Bank preset buttons
+      document.querySelectorAll('.bank-preset-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const bName = btn.getAttribute('data-bank');
+          if (bName && bankNameInput) {
+            bankNameInput.value = bName;
+          }
+        });
+      });
+
+      // Partner checkbox toggle
+      chkPayPartner?.addEventListener('change', () => {
+        if (!partnerPayoutDetails) return;
+        if (chkPayPartner.checked) {
+          partnerPayoutDetails.classList.remove('hidden');
+        } else {
+          partnerPayoutDetails.classList.add('hidden');
+        }
+      });
+
+      // Close modal on click backdrop
+      const modal = document.getElementById('posPaymentModal');
+      modal?.addEventListener('click', (e) => {
+        const rect = modal.getBoundingClientRect();
+        const isInDialog = (rect.top <= e.clientY && e.clientY <= rect.top + rect.height && rect.left <= e.clientX && e.clientX <= rect.left + rect.width);
+        if (!isInDialog) {
+          modal.close();
+        }
+      });
+    })();
+  </script>
+</AdminLayout>

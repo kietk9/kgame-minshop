@@ -1,0 +1,117 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import { menuReferencesFor } from '../../../features/navigation/admin';
+import {
+  listCategories,
+  buildTree,
+  flattenTree,
+  productCounts,
+} from '../../../features/categories/db';
+
+const rows = flattenTree(buildTree(await listCategories(env.DB)));
+const counts = await productCounts(env.DB);
+const menuRefs = await menuReferencesFor(env.DB, 'category', rows.map((r) => r.id));
+---
+
+<AdminLayout title="Quản lý Danh mục" active="categories">
+  <div class="mb-6 flex flex-wrap items-center justify-between gap-4">
+    <div>
+      <div class="flex items-center gap-2">
+        <a href="/admin/products" class="text-xs font-semibold text-gray-500 hover:text-brand">&larr; Về Hàng hóa</a>
+      </div>
+      <h1 class="mt-1 text-2xl font-bold text-gray-900">Quản lý Danh mục</h1>
+      <p class="mt-1 text-sm text-gray-500">
+        Tầng 1 trong cấu trúc 4 tầng: Danh mục (Cá dĩa, Cá tiên, Máy bắn cá...) dùng để phân nhóm và lọc báo cáo.
+      </p>
+    </div>
+    <a
+      href="/admin/categories/new"
+      class="inline-flex items-center gap-1.5 rounded-lg bg-brand px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-white shadow-sm transition hover:bg-brand-hover hover:shadow"
+    >
+      <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      Thêm danh mục mới
+    </a>
+  </div>
+
+  <div class="mb-6 rounded-xl border border-blue-200 bg-blue-50/60 p-4 text-xs text-blue-800 flex items-start gap-3">
+    <svg class="h-5 w-5 text-blue-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    <div>
+      <span class="font-bold">Quy tắc nghiệp vụ lõi:</span>
+      Đổi tên danh mục hoặc chuyển sản phẩm sang danh mục khác <strong>tuyệt đối không làm thay đổi Mã sản phẩm (SKU)</strong>, tồn kho, lịch sử giá, Program Code hay lịch sử sửa chữa.
+    </div>
+  </div>
+
+  <div class="rounded-xl border border-line bg-white shadow-sm overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-[14.5px]">
+        <thead class="bg-[#f8f9fa] border-b border-line text-[14px] font-semibold text-gray-700 select-none">
+          <tr>
+            <th class="px-6 py-3.5">Tên danh mục</th>
+            <th class="px-6 py-3.5">Đường dẫn (Slug)</th>
+            <th class="px-6 py-3.5">Số mặt hàng</th>
+            <th class="px-6 py-3.5 text-right">Thao tác</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-line">
+          {
+            rows.map((c) => (
+              <tr class="hover:bg-blue-50/40 transition">
+                <td class="px-6 py-4">
+                  <a
+                    href={`/admin/categories/${c.public_id}/edit`}
+                    class="inline-flex items-center gap-1.5 font-normal text-gray-900 hover:text-blue-600 text-[14.5px]"
+                    style={`padding-left:${c.depth * 20}px`}
+                  >
+                    {c.depth > 0 && <span class="text-gray-400">↳ </span>}
+                    <span>{c.name}</span>
+                  </a>
+                </td>
+                <td class="px-6 py-4 text-[13px] text-gray-500">{c.slug}</td>
+                <td class="px-6 py-4">
+                  <span class="inline-flex items-center rounded bg-gray-100 px-2.5 py-0.5 text-[12px] tabular-nums font-normal text-gray-800">
+                    {counts.get(c.id) ?? 0} mặt hàng
+                  </span>
+                </td>
+                <td class="px-6 py-4 text-right">
+                  <div class="flex justify-end items-center gap-3 text-[13px] font-medium">
+                    <a
+                      href={`/admin/categories/${c.public_id}/edit`}
+                      class="inline-flex items-center gap-1 text-blue-600 hover:underline"
+                    >
+                      <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                      Sửa
+                    </a>
+                    <form
+                      method="POST"
+                      action={`/api/admin/categories/${c.public_id}`}
+                      onsubmit={`return confirm('${
+                        menuRefs.has(c.id)
+                          ? 'Danh mục này đang được liên kết trên menu website. Xóa danh mục sẽ ẩn liên kết trên web. Bạn có chắc chắn muốn xóa?'
+                          : 'Bạn có chắc muốn xóa danh mục này? Các danh mục con sẽ chuyển lên cấp cha.'
+                      }')`}
+                    >
+                      <input type="hidden" name="_action" value="delete" />
+                      <button type="submit" class="text-red-600 hover:underline">
+                        Xóa
+                      </button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+            ))
+          }
+          {
+            rows.length === 0 && (
+              <tr>
+                <td colspan="4" class="px-6 py-12 text-center text-gray-400 text-sm">
+                  Chưa có danh mục nào. Hãy tạo danh mục đầu tiên.
+                </td>
+              </tr>
+            )
+          }
+        </tbody>
+      </table>
+    </div>
+  </div>
+</AdminLayout>

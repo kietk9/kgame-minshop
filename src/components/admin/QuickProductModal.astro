@@ -1,0 +1,1234 @@
+---
+import { env } from 'cloudflare:workers';
+
+// Lấy danh sách nhóm hàng cha/con
+const { results: rawCategories } = await env.DB
+  .prepare('SELECT id, name, parent_id FROM categories ORDER BY parent_id ASC, name ASC')
+  .all<any>();
+
+const categories: any[] = [];
+const parentCats = (rawCategories || []).filter(c => !c.parent_id);
+for (const p of parentCats) {
+  categories.push({ ...p, level: 0, displayName: p.name });
+  const children = (rawCategories || []).filter(c => c.parent_id === p.id);
+  for (const ch of children) {
+    categories.push({ ...ch, level: 1, displayName: `— ${ch.name}` });
+  }
+}
+// Những nhóm con mà cha không tìm thấy (nếu có)
+const addedIds = new Set(categories.map(c => c.id));
+for (const c of (rawCategories || [])) {
+  if (!addedIds.has(c.id)) {
+    categories.push({ ...c, level: 0, displayName: c.name });
+  }
+}
+
+// Lấy danh sách thương hiệu
+const { results: rawBrands } = await env.DB
+  .prepare('SELECT id, name FROM brands ORDER BY name ASC')
+  .all<any>();
+const brands = rawBrands || [];
+---
+
+<!-- MODAL TẠO & SỬA HÀNG HÓA CHUẨN KIOTVIET -->
+<div
+  id="quickProductModal"
+  class="fixed inset-0 z-50 hidden bg-black/60 backdrop-blur-xs overflow-y-auto p-2 sm:p-4 md:p-6 flex items-center justify-center transition-all"
+  role="dialog"
+  aria-modal="true"
+>
+  <div class="relative w-full max-w-4xl rounded-2xl bg-white shadow-2xl border border-gray-200 overflow-hidden my-auto animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[92vh]">
+    
+    <!-- HEADER -->
+    <div class="flex items-center justify-between border-b border-gray-200 px-6 py-3.5 bg-gray-50/80 shrink-0">
+      <div class="flex items-center gap-2">
+        <div class="w-7 h-7 rounded-lg bg-blue-50 text-brand flex items-center justify-center font-bold text-sm">
+          📦
+        </div>
+        <h3 id="quickProductModalTitle" class="text-base font-bold text-gray-900">Tạo hàng hóa</h3>
+      </div>
+      <button
+        type="button"
+        id="closeQuickProductModalBtn"
+        class="text-gray-400 hover:text-gray-600 transition rounded-lg p-1.5 hover:bg-gray-200/60 cursor-pointer"
+        title="Đóng"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <!-- TABS BAR CHUẨN KIOTVIET -->
+    <div class="border-b border-gray-200 px-6 flex gap-8 text-sm font-semibold bg-white shrink-0">
+      <button
+        type="button"
+        id="qpTabBtnInfo"
+        class="qp-tab-btn py-3 text-brand border-b-2 border-brand -mb-px transition-colors cursor-pointer flex items-center gap-1.5"
+        data-target="qpPanelInfo"
+      >
+        <span>Thông tin</span>
+      </button>
+      <button
+        type="button"
+        id="qpTabBtnDesc"
+        class="qp-tab-btn py-3 text-gray-500 hover:text-gray-800 border-b-2 border-transparent -mb-px transition-colors cursor-pointer flex items-center gap-1.5"
+        data-target="qpPanelDesc"
+      >
+        <span>Mô tả</span>
+      </button>
+      <button
+        type="button"
+        id="qpTabBtnWarranty"
+        class="qp-tab-btn py-3 text-gray-500 hover:text-gray-800 border-b-2 border-transparent -mb-px transition-colors cursor-pointer flex items-center gap-1.5"
+        data-target="qpPanelWarranty"
+      >
+        <span>Bảo hành, bảo trì</span>
+      </button>
+    </div>
+
+    <!-- FORM BODY -->
+    <form id="quickProductForm" class="flex-1 overflow-y-auto p-6 space-y-5">
+      <!-- ID khi sửa sản phẩm (nếu có) -->
+      <input type="hidden" id="qpEditProductId" value="" />
+      
+      <!-- ==================== TAB 1: THÔNG TIN ==================== -->
+      <div id="qpPanelInfo" class="qp-tab-panel space-y-5">
+        <!-- 1. MÃ HÀNG, MÃ VẠCH, TÊN HÀNG -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-semibold text-gray-700 mb-1">Mã hàng</label>
+            <input
+              type="text"
+              id="qpCode"
+              placeholder="Tự động (Ví dụ: SP000342)"
+              class="w-full py-2 px-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand bg-gray-50/50"
+            />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-700 mb-1">Mã vạch</label>
+            <input
+              type="text"
+              id="qpBarcode"
+              placeholder="Nhập mã vạch (tùy chọn)"
+              class="w-full py-2 px-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-gray-700 mb-1">
+            Tên hàng <span class="text-red-500">*</span>
+          </label>
+          <input
+            type="text"
+            id="qpName"
+            placeholder="Bắt buộc (Ví dụ: Mạch tay 620, Nguồn 5V-12V, Natra 2 người, Màn hình 55 inch...)"
+            required
+            class="w-full py-2.5 px-3.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand font-medium text-gray-900"
+          />
+          <!-- CẢNH BÁO TRÙNG TÊN HÀNG HÓA CHUẨN KIOTVIET -->
+          <div id="qpDuplicateWarning" class="hidden mt-2 p-2.5 bg-amber-50 border border-amber-300 rounded-lg text-xs text-amber-900 flex items-center justify-between shadow-2xs">
+            <div class="flex items-center gap-2">
+              <span class="text-amber-600 font-bold text-base">⚠️</span>
+              <div>
+                <span id="qpDuplicateWarningText" class="font-semibold">Hàng hóa này đã tồn tại trong hệ thống!</span>
+                <div class="text-[11px] text-amber-700 mt-0.5">Bạn có thể mở sản phẩm này để cập nhật/nhập kho, hoặc đổi tên phân biệt.</div>
+              </div>
+            </div>
+            <button
+              type="button"
+              id="qpOpenDuplicateBtn"
+              class="px-2.5 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-md text-xs font-bold transition shadow-2xs cursor-pointer shrink-0 ml-2"
+            >
+              👉 Mở sản phẩm này
+            </button>
+          </div>
+        </div>
+
+        <!-- 2. NHÓM HÀNG & THƯƠNG HIỆU -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-semibold text-gray-700 mb-1">Nhóm hàng</label>
+            <select
+              id="qpCategory"
+              class="w-full py-2 px-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand bg-white"
+            >
+              <option value="">-- Chọn nhóm hàng (Không bắt buộc) --</option>
+              {categories.map((c) => (
+                <option value={c.id}>
+                  {c.displayName}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-xs font-semibold text-gray-700">Thương hiệu / Nguồn gốc</label>
+              <button
+                type="button"
+                id="qpQuickAddBrandBtn"
+                class="text-[11px] font-semibold text-brand hover:underline flex items-center gap-0.5 cursor-pointer"
+                title="Tạo nhanh thương hiệu mới"
+              >
+                + Tạo mới
+              </button>
+            </div>
+            <select
+              id="qpBrand"
+              class="w-full py-2 px-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand bg-white"
+            >
+              <option value="">-- Chọn thương hiệu / nguồn gốc --</option>
+              {brands.map((b) => (
+                <option value={b.name} data-id={b.id}>{b.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <!-- 3. TÌNH TRẠNG & GIÁ (MỚI / CŨ / CẢ HAI) -->
+        <div class="border border-gray-200 rounded-xl p-4 bg-gray-50/50 space-y-3.5">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-xs font-bold text-gray-800 uppercase tracking-wider">Tình trạng hàng &amp; Bảng giá</span>
+            <div class="flex items-center gap-2 text-xs bg-white px-2.5 py-1 rounded-lg border border-gray-200">
+              <span class="text-gray-500 font-medium">Tình trạng tạo:</span>
+              <label class="inline-flex items-center gap-1 cursor-pointer">
+                <input type="radio" name="qpInitialCondition" value="NEW" checked class="text-brand focus:ring-brand" />
+                <span class="font-semibold text-emerald-700">Mới 100%</span>
+              </label>
+              <label class="inline-flex items-center gap-1 cursor-pointer ml-2">
+                <input type="radio" name="qpInitialCondition" value="QSD" class="text-amber-600 focus:ring-amber-500" />
+                <span class="font-semibold text-amber-700">Cũ / QSD</span>
+              </label>
+              <label class="inline-flex items-center gap-1 cursor-pointer ml-2">
+                <input type="radio" name="qpInitialCondition" value="BOTH" class="text-purple-600 focus:ring-purple-500" />
+                <span class="font-semibold text-purple-700">Cả Mới &amp; Cũ</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Nhập giá khi chọn Mới HOẶC Cũ -->
+          <div id="qpSinglePriceBox" class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label id="qpCostLabel" class="block text-xs font-medium text-gray-600 mb-1">Giá vốn (Mới)</label>
+              <input
+                type="text"
+                id="qpCost"
+                placeholder="0"
+                class="w-full py-2 px-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand bg-white font-mono"
+              />
+            </div>
+            <div>
+              <label id="qpPriceLabel" class="block text-xs font-semibold text-blue-700 mb-1">Giá bán (Mới)</label>
+              <input
+                type="text"
+                id="qpPrice"
+                placeholder="0"
+                class="w-full py-2 px-3 text-sm border border-blue-300 rounded-lg focus:outline-none focus:border-brand bg-white font-mono font-bold text-blue-700"
+              />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-600 mb-1">Đơn vị tính cơ bản</label>
+              <input
+                type="text"
+                id="qpUnitName"
+                value="Cái"
+                placeholder="Cái, Bộ, Con, Hộp, Cặp..."
+                class="w-full py-2 px-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand bg-white"
+              />
+            </div>
+          </div>
+
+          <!-- Nhập giá khi chọn Cả Mới & Cũ -->
+          <div id="qpBothPriceBox" class="hidden grid grid-cols-2 sm:grid-cols-4 gap-3 bg-white p-3 rounded-lg border border-gray-200">
+            <div>
+              <label class="block text-[11px] font-medium text-gray-600 mb-1">Giá vốn (Mới)</label>
+              <input type="text" id="qpBothCostNew" placeholder="0" class="w-full py-1.5 px-2 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand font-mono" />
+            </div>
+            <div>
+              <label class="block text-[11px] font-semibold text-blue-700 mb-1">Giá bán (Mới)</label>
+              <input type="text" id="qpBothPriceNew" placeholder="0" class="w-full py-1.5 px-2 text-xs border border-blue-300 rounded focus:outline-none focus:border-brand font-mono font-bold text-blue-700" />
+            </div>
+            <div>
+              <label class="block text-[11px] font-medium text-gray-600 mb-1">Giá vốn (Cũ)</label>
+              <input type="text" id="qpBothCostUsed" placeholder="0" class="w-full py-1.5 px-2 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand font-mono" />
+            </div>
+            <div>
+              <label class="block text-[11px] font-semibold text-amber-700 mb-1">Giá bán (Cũ)</label>
+              <input type="text" id="qpBothPriceUsed" placeholder="0" class="w-full py-1.5 px-2 text-xs border border-amber-300 rounded focus:outline-none focus:border-brand font-mono font-bold text-amber-700" />
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. KHỐI TỒN KHO & QUẢN LÝ THEO SERIAL/IMEI (MÃ BỘ) -->
+        <div class="border border-gray-200 rounded-xl p-4 bg-gray-50/50 space-y-4">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-gray-800 uppercase tracking-wider">Tồn kho &amp; Quản lý Serial/IMEI</span>
+            <span class="text-[11px] text-gray-500">Thiết lập cách theo dõi kho</span>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <!-- CHỌN QUẢN LÝ SERIAL -->
+            <div>
+              <label class="block text-xs font-semibold text-gray-700 mb-1">Quản lý theo serial/IMEI</label>
+              <select
+                id="qpHasSerial"
+                class="w-full py-2 px-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand bg-white font-semibold text-gray-800"
+              >
+                <option value="0" selected>Không (Quản lý theo số lượng)</option>
+                <option value="1">Có (Quản lý mã bộ 777-xxxx / Serial / IMEI)</option>
+              </select>
+            </div>
+
+            <!-- TỒN KHO BAN ĐẦU (KHI KHÔNG THEO SERIAL) -->
+            <div id="qpStandardStockBox">
+              <label id="qpStandardStockLabel" class="block text-xs font-semibold text-gray-700 mb-1">Tồn kho ban đầu (Mới)</label>
+              <input
+                type="number"
+                id="qpStandardStock"
+                min="0"
+                value="0"
+                class="w-full py-2 px-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand bg-white font-mono"
+              />
+            </div>
+          </div>
+
+          <!-- KHU VỰC NHẬP MÃ BỘ / SERIAL TRỰC TIẾP (KHI CHỌN QUẢN LÝ THEO SERIAL) -->
+          <div id="qpSerialInputBox" class="hidden border border-blue-200 bg-blue-50/40 rounded-xl p-4 space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-bold text-blue-900 uppercase">Danh sách Mã bộ / Serial ban đầu (hoặc bổ sung)</span>
+                <span id="qpSerialBadgeCount" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">
+                  0 mã
+                </span>
+              </div>
+              <div class="flex items-center gap-2 text-xs">
+                <span class="text-gray-600 font-medium">Tình trạng mã:</span>
+                <label class="inline-flex items-center gap-1 cursor-pointer">
+                  <input type="radio" name="qpSerialCondition" value="NEW" checked class="text-brand focus:ring-brand" />
+                  <span class="font-semibold text-green-700">Mới (100%)</span>
+                </label>
+                <label class="inline-flex items-center gap-1 cursor-pointer ml-2">
+                  <input type="radio" name="qpSerialCondition" value="QSD" class="text-amber-600 focus:ring-amber-500" />
+                  <span class="font-semibold text-amber-700">Cũ / QSD</span>
+                </label>
+              </div>
+            </div>
+
+            <div>
+              <textarea
+                id="qpSerialList"
+                rows="4"
+                placeholder="Nhập hoặc quét mã bộ vào đây (Mỗi mã 1 dòng hoặc cách nhau bởi dấu phẩy)
+Ví dụ:
+777-620001
+777-620002
+777-620003"
+                class="w-full p-2.5 text-xs font-mono border border-blue-300 rounded-lg focus:outline-none focus:border-brand bg-white leading-relaxed"
+              ></textarea>
+              <div class="flex items-center justify-between text-[11px] text-gray-500 mt-1">
+                <span>💡 Hỗ trợ dán danh sách từ Excel hoặc dùng súng bắn mã barcode liên tục.</span>
+                <span>Có thể để trống nếu chưa nhập tồn kho.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5. ĐƠN VỊ TÍNH & THUỘC TÍNH PHÂN LOẠI (MỚI/CŨ, PHIÊN BẢN...) -->
+        <div class="border border-gray-200 rounded-xl p-4 bg-gray-50/50 space-y-3">
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-xs font-bold text-gray-800 uppercase tracking-wider">Thuộc tính &amp; Phiên bản</span>
+              <p class="text-[11px] text-gray-500 mt-0.5">Tạo các biến thể như: Mới / Cũ, Phiên bản 620, 617, Không PIN...</p>
+            </div>
+            <button
+              type="button"
+              id="qpAddVariantBtn"
+              class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-brand text-brand hover:bg-brand hover:text-white text-xs font-semibold transition cursor-pointer"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+              <span>+ Thêm thuộc tính / phiên bản</span>
+            </button>
+          </div>
+
+          <!-- DANH SÁCH BIẾN THỂ THUỘC TÍNH (NẾU THÊM) -->
+          <div id="qpVariantsContainer" class="hidden space-y-2 pt-2 border-t border-gray-200">
+            <div class="grid grid-cols-12 gap-2 text-[11px] font-bold text-gray-600 px-2 uppercase">
+              <div class="col-span-5">Tên thuộc tính / Phiên bản</div>
+              <div class="col-span-3">Giá bán</div>
+              <div class="col-span-3">Giá vốn</div>
+              <div class="col-span-1 text-center">Xóa</div>
+            </div>
+            <div id="qpVariantsList" class="space-y-2">
+              <!-- Render động bằng JS -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== TAB 2: MÔ TẢ ==================== -->
+      <div id="qpPanelDesc" class="qp-tab-panel hidden space-y-5">
+        <!-- 1. MÔ TẢ CHI TIẾT SẢN PHẨM (DÙNG ĐỒNG BỘ WEB) -->
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="block text-xs font-bold text-gray-800 uppercase tracking-wider">
+              Mô tả chi tiết sản phẩm
+            </label>
+            <span class="text-[11px] text-gray-500">Hiển thị ra Web bán hàng / giới thiệu sau này</span>
+          </div>
+          
+          <!-- Toolbar đơn giản phong cách KiotViet -->
+          <div class="border border-gray-300 rounded-t-lg bg-gray-100 px-3 py-1.5 flex items-center gap-2 border-b-0 text-xs">
+            <span class="font-semibold text-gray-600 mr-1">Định dạng:</span>
+            <button type="button" class="qp-format-btn px-2 py-1 font-bold rounded hover:bg-gray-200 text-gray-700" data-cmd="bold" title="In đậm">B</button>
+            <button type="button" class="qp-format-btn px-2 py-1 italic rounded hover:bg-gray-200 text-gray-700" data-cmd="italic" title="In nghiêng">I</button>
+            <button type="button" class="qp-format-btn px-2 py-1 underline rounded hover:bg-gray-200 text-gray-700" data-cmd="underline" title="Gạch chân">U</button>
+            <span class="w-px h-4 bg-gray-300 mx-1"></span>
+            <button type="button" class="qp-format-btn px-2 py-1 rounded hover:bg-gray-200 text-gray-700" data-cmd="insertUnorderedList" title="Gạch đầu dòng">• Danh sách</button>
+          </div>
+          <div
+            id="qpDescriptionEditor"
+            contenteditable="true"
+            class="min-h-[160px] max-h-[260px] overflow-y-auto p-3.5 text-sm border border-gray-300 rounded-b-lg focus:outline-none focus:border-brand bg-white text-gray-800 leading-relaxed"
+            data-placeholder="Nhập giới thiệu tính năng, thông số kỹ thuật, cấu hình..." aria-label="Giới thiệu tính năng, thông số kỹ thuật, cấu hình"
+          ></div>
+          <p class="text-[11px] text-gray-500">Tùy chọn: Có thể nhập hoặc để trống khi tạo nhanh.</p>
+        </div>
+
+        <!-- 2. MẪU GHI CHÚ (HÓA ĐƠN, ĐẶT HÀNG) -->
+        <div class="space-y-2 pt-2 border-t border-gray-200">
+          <div class="flex items-center justify-between">
+            <label class="block text-xs font-bold text-gray-800 uppercase tracking-wider">
+              Mẫu ghi chú (hóa đơn, đặt hàng)
+            </label>
+            <span class="text-[11px] text-gray-500">Tự động gợi ý khi lên đơn sản phẩm này</span>
+          </div>
+          <textarea
+            id="qpInvoiceNote"
+            rows="3"
+            placeholder="Ví dụ: Kiểm tra kỹ tem bảo hành trước khi giao máy; Nhớ bàn giao kèm dây cắm nguồn 220V..."
+            class="w-full p-3 text-xs border border-gray-300 rounded-lg focus:outline-none focus:border-brand bg-white leading-relaxed"
+          ></textarea>
+        </div>
+      </div>
+
+      <!-- ==================== TAB 3: BẢO HÀNH, BẢO TRÌ ==================== -->
+      <div id="qpPanelWarranty" class="qp-tab-panel hidden space-y-6">
+        <!-- 1. BẢO HÀNH -->
+        <div class="border border-gray-200 rounded-xl p-4 bg-white space-y-3">
+          <div class="flex items-center justify-between border-b border-gray-100 pb-2">
+            <div>
+              <h4 class="text-xs font-bold text-gray-800 uppercase tracking-wider">Cài đặt thời hạn bảo hành</h4>
+              <p class="text-[11px] text-gray-500">Mốc thời gian bảo hành cho sản phẩm (tháng / ngày / năm)</p>
+            </div>
+            <button
+              type="button"
+              id="qpAddWarrantyBtn"
+              class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-brand text-brand hover:bg-brand hover:text-white text-xs font-semibold transition cursor-pointer"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+              <span>+ Thêm mốc bảo hành</span>
+            </button>
+          </div>
+
+          <div id="qpWarrantyEmptyNotice" class="text-center py-6 text-xs text-gray-400">
+            Chưa có mốc bảo hành nào. Bấm nút "+ Thêm mốc bảo hành" ở trên để thiết lập nếu cần.
+          </div>
+
+          <div id="qpWarrantyList" class="space-y-2.5">
+            <!-- Render động bằng JS -->
+          </div>
+        </div>
+
+        <!-- 2. BẢO TRÌ ĐỊNH KỲ -->
+        <div class="border border-gray-200 rounded-xl p-4 bg-white space-y-3">
+          <div class="flex items-center justify-between border-b border-gray-100 pb-2">
+            <div>
+              <h4 class="text-xs font-bold text-gray-800 uppercase tracking-wider">Bảo trì định kỳ</h4>
+              <p class="text-[11px] text-gray-500">Cài đặt chu kỳ bảo trì, vệ sinh kiểm tra máy</p>
+            </div>
+            <button
+              type="button"
+              id="qpAddMaintenanceBtn"
+              class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-blue-600 text-blue-600 hover:bg-blue-600 hover:text-white text-xs font-semibold transition cursor-pointer"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+              <span>+ Thêm mốc bảo trì</span>
+            </button>
+          </div>
+
+          <div id="qpMaintenanceEmptyNotice" class="text-center py-6 text-xs text-gray-400">
+            Chưa có mốc bảo trì nào. Bấm nút "+ Thêm mốc bảo trì" ở trên để thiết lập nếu cần.
+          </div>
+
+          <div id="qpMaintenanceList" class="space-y-2.5">
+            <!-- Render động bằng JS -->
+          </div>
+        </div>
+      </div>
+
+    </form>
+
+    <!-- FOOTER -->
+    <div class="flex items-center justify-between border-t border-gray-200 px-6 py-3.5 bg-gray-50/90 shrink-0">
+      <label class="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer">
+        <input type="checkbox" id="qpDirectSale" checked class="rounded text-brand focus:ring-brand" />
+        <span>Bán trực tiếp</span>
+        <span class="text-gray-400 hover:text-gray-600 cursor-help" title="Cho phép hiển thị và xuất bán trực tiếp trên màn hình Bán Hàng & Đặt Hàng">ℹ️</span>
+      </label>
+
+      <div class="flex items-center gap-3">
+        <button
+          type="button"
+          id="qpCancelBtn"
+          class="px-4 py-2 text-xs font-semibold text-gray-600 hover:text-gray-800 transition cursor-pointer"
+        >
+          Bỏ qua
+        </button>
+        <button
+          type="button"
+          id="qpSaveBtn"
+          class="px-6 py-2.5 rounded-xl bg-brand text-white font-bold text-xs hover:bg-blue-700 transition shadow-sm cursor-pointer flex items-center gap-1.5"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+          <span id="qpSaveBtnText">Lưu</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  #qpDescriptionEditor:empty::before { content: attr(data-placeholder); color: #6b7280; pointer-events: none; }
+</style>
+<script>
+  import { requireSelect } from '../../features/kgame/formElements';
+  import { parseAdminApiResponse } from '../../features/kgame/apiResponse';
+  // DOM Elements
+  const modal = document.getElementById('quickProductModal') as HTMLElement;
+  const modalTitle = document.getElementById('quickProductModalTitle') as HTMLElement;
+  const editProductIdInput = document.getElementById('qpEditProductId') as HTMLInputElement;
+  const saveBtnText = document.getElementById('qpSaveBtnText') as HTMLElement;
+  const closeBtn = document.getElementById('closeQuickProductModalBtn');
+  const cancelBtn = document.getElementById('qpCancelBtn');
+  const saveBtn = document.getElementById('qpSaveBtn') as HTMLButtonElement;
+
+  // Tabs
+  const tabBtns = document.querySelectorAll('.qp-tab-btn');
+  const tabPanels = document.querySelectorAll('.qp-tab-panel');
+
+  tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.getAttribute('data-target');
+      
+      // Update Tab Styles
+      tabBtns.forEach(b => {
+        b.classList.remove('text-brand', 'border-brand');
+        b.classList.add('text-gray-500', 'border-transparent');
+      });
+      btn.classList.add('text-brand', 'border-brand');
+      btn.classList.remove('text-gray-500', 'border-transparent');
+
+      // Toggle Panels
+      tabPanels.forEach(panel => {
+        if (panel.id === targetId) {
+          panel.classList.remove('hidden');
+        } else {
+          panel.classList.add('hidden');
+        }
+      });
+    });
+  });
+
+  // Rich-text editor formatting buttons
+  const formatBtns = document.querySelectorAll('.qp-format-btn');
+  formatBtns.forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const cmd = btn.getAttribute('data-cmd');
+      if (cmd) {
+        document.execCommand(cmd, false, undefined);
+      }
+    });
+  });
+
+  // Real-time Duplicate Product Name Check (Chuẩn KiotViet)
+  const nameInputEl = document.getElementById('qpName') as HTMLInputElement;
+  const duplicateWarning = document.getElementById('qpDuplicateWarning') as HTMLElement;
+  const duplicateWarningText = document.getElementById('qpDuplicateWarningText') as HTMLElement;
+  const openDuplicateBtn = document.getElementById('qpOpenDuplicateBtn') as HTMLButtonElement;
+
+  let currentDuplicateProduct: any = null;
+  let checkNameTimeout: any = null;
+
+  async function checkDuplicateName() {
+    const editId = editProductIdInput?.value;
+    const name = nameInputEl?.value.trim();
+    if (!name || name.length < 2) {
+      duplicateWarning?.classList.add('hidden');
+      currentDuplicateProduct = null;
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/admin/quick-product?check_name=${encodeURIComponent(name)}&exclude_id=${editId || ''}`);
+      const data = await res.json() as any;
+      if (data.exists && data.product) {
+        currentDuplicateProduct = data.product;
+        if (duplicateWarningText) {
+          const p = data.product;
+          duplicateWarningText.textContent = `Hàng hóa "${p.name}" đã tồn tại trong hệ thống (Mã: ${p.product_code}, Tồn: ${p.stock || 0})`;
+        }
+        duplicateWarning?.classList.remove('hidden');
+      } else {
+        currentDuplicateProduct = null;
+        duplicateWarning?.classList.add('hidden');
+      }
+    } catch (e) {
+      console.error('Lỗi kiểm tra trùng tên:', e);
+    }
+  }
+
+  nameInputEl?.addEventListener('input', () => {
+    clearTimeout(checkNameTimeout);
+    checkNameTimeout = setTimeout(checkDuplicateName, 350);
+  });
+  nameInputEl?.addEventListener('blur', checkDuplicateName);
+
+  openDuplicateBtn?.addEventListener('click', () => {
+    if (currentDuplicateProduct && typeof (window as any).openEditProductModal === 'function') {
+      (window as any).openEditProductModal(currentDuplicateProduct);
+    }
+  });
+
+  // Toggle Serial Inputs & Stock Inputs
+  const hasSerialSelect = requireSelect('#qpHasSerial');
+  const standardStockBox = document.getElementById('qpStandardStockBox') as HTMLElement;
+  const serialInputBox = document.getElementById('qpSerialInputBox') as HTMLElement;
+  const serialListTextarea = document.getElementById('qpSerialList') as HTMLTextAreaElement;
+  const serialBadgeCount = document.getElementById('qpSerialBadgeCount') as HTMLElement;
+
+  function updateSerialCount() {
+    if (!serialListTextarea || !serialBadgeCount) return;
+    const text = serialListTextarea.value.trim();
+    if (!text) {
+      serialBadgeCount.textContent = '0 mã';
+      return;
+    }
+    const codes = text.split(/[\n,;]+/).map(c => c.trim()).filter(c => c.length > 0);
+    serialBadgeCount.textContent = `${codes.length} mã`;
+  }
+
+  serialListTextarea?.addEventListener('input', updateSerialCount);
+
+  hasSerialSelect?.addEventListener('change', () => {
+    const isSerial = hasSerialSelect.value === '1';
+    if (isSerial) {
+      standardStockBox?.classList.add('hidden');
+      serialInputBox?.classList.remove('hidden');
+      updateSerialCount();
+    } else {
+      standardStockBox?.classList.remove('hidden');
+      serialInputBox?.classList.add('hidden');
+    }
+  });
+
+  // Number format helper
+  function attachVndFormat(inputId: string) {
+    const el = document.getElementById(inputId) as HTMLInputElement;
+    el?.addEventListener('input', () => {
+      const val = el.value.replace(/\D/g, '');
+      if (val) {
+        el.value = new Intl.NumberFormat('vi-VN').format(Number(val));
+      }
+    });
+  }
+
+  attachVndFormat('qpCost');
+  attachVndFormat('qpPrice');
+  attachVndFormat('qpBothCostNew');
+  attachVndFormat('qpBothPriceNew');
+  attachVndFormat('qpBothCostUsed');
+  attachVndFormat('qpBothPriceUsed');
+
+  // Condition selector logic
+  const condRadios = document.querySelectorAll('input[name="qpInitialCondition"]');
+  const singlePriceBox = document.getElementById('qpSinglePriceBox') as HTMLElement;
+  const bothPriceBox = document.getElementById('qpBothPriceBox') as HTMLElement;
+  const costLabel = document.getElementById('qpCostLabel') as HTMLElement;
+  const priceLabel = document.getElementById('qpPriceLabel') as HTMLElement;
+
+  function updateConditionUI() {
+    const selected = (document.querySelector('input[name="qpInitialCondition"]:checked') as HTMLInputElement)?.value || 'NEW';
+    const serialConditionRadios = document.querySelectorAll('input[name="qpSerialCondition"]');
+    const stockLabel = document.getElementById('qpStandardStockLabel');
+
+    if (selected === 'NEW') {
+      singlePriceBox?.classList.remove('hidden');
+      bothPriceBox?.classList.add('hidden');
+      if (costLabel) costLabel.textContent = 'Giá vốn (Mới)';
+      if (priceLabel) priceLabel.textContent = 'Giá bán (Mới)';
+      if (stockLabel) stockLabel.textContent = 'Tồn kho ban đầu (Mới)';
+      serialConditionRadios.forEach((r: any) => { if (r.value === 'NEW') r.checked = true; });
+    } else if (selected === 'QSD') {
+      singlePriceBox?.classList.remove('hidden');
+      bothPriceBox?.classList.add('hidden');
+      if (costLabel) costLabel.textContent = 'Giá vốn thu mua (Cũ)';
+      if (priceLabel) priceLabel.textContent = 'Giá bán thanh lý (Cũ)';
+      if (stockLabel) stockLabel.textContent = 'Tồn kho ban đầu (Cũ / QSD)';
+      serialConditionRadios.forEach((r: any) => { if (r.value === 'QSD') r.checked = true; });
+    } else { // BOTH
+      singlePriceBox?.classList.add('hidden');
+      bothPriceBox?.classList.remove('hidden');
+      if (stockLabel) stockLabel.textContent = 'Tồn kho ban đầu';
+    }
+  }
+
+  condRadios.forEach(r => r.addEventListener('change', updateConditionUI));
+
+  // Quick Brand Add
+  const quickAddBrandBtn = document.getElementById('qpQuickAddBrandBtn');
+  const brandSelect = requireSelect('#qpBrand');
+
+  quickAddBrandBtn?.addEventListener('click', async () => {
+    const brandName = prompt('Nhập tên thương hiệu / nguồn gốc mới (VD: Sanwa, SEGA, IGS, Đài Loan, TQ...):');
+    if (!brandName || !brandName.trim()) return;
+
+    try {
+      const res = await fetch('/api/admin/brands', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create', name: brandName.trim() })
+      });
+      const data = await res.json() as any;
+      if (data.success && data.brand) {
+        let opt = Array.from(brandSelect.options).find(o => o.value.toLowerCase() === data.brand.name.toLowerCase());
+        if (!opt) {
+          opt = document.createElement('option');
+          opt.value = data.brand.name;
+          opt.textContent = data.brand.name;
+          brandSelect.appendChild(opt);
+        }
+        opt.selected = true;
+      } else {
+        alert(data.error || 'Không thể tạo thương hiệu');
+      }
+    } catch (err: any) {
+      alert('Lỗi kết nối tạo thương hiệu: ' + err.message);
+    }
+  });
+
+  // ----------------------------------------------------
+  // Xử lý Thêm Biến thể / Thuộc tính
+  // ----------------------------------------------------
+  const addVariantBtn = document.getElementById('qpAddVariantBtn');
+  const variantsContainer = document.getElementById('qpVariantsContainer') as HTMLElement;
+  const variantsList = document.getElementById('qpVariantsList') as HTMLElement;
+  let variantCount = 0;
+
+  addVariantBtn?.addEventListener('click', () => {
+    variantsContainer.classList.remove('hidden');
+    variantCount++;
+    const vId = `vRow_${variantCount}`;
+    const basePrice = (document.getElementById('qpPrice') as HTMLInputElement)?.value || '';
+    const baseCost = (document.getElementById('qpCost') as HTMLInputElement)?.value || '';
+
+    const row = document.createElement('div');
+    row.id = vId;
+    row.className = 'grid grid-cols-12 gap-2 items-center bg-white p-2 rounded-lg border border-gray-200';
+    row.innerHTML = `
+      <div class="col-span-5">
+        <input type="text" placeholder="Tên phiên bản (VD: Cũ 90%, 620, 617...)" class="v-name w-full py-1.5 px-2 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand" required />
+      </div>
+      <div class="col-span-3">
+        <input type="text" value="${basePrice}" placeholder="Giá bán" class="v-price w-full py-1.5 px-2 text-xs border border-blue-300 rounded focus:outline-none focus:border-brand font-mono font-bold text-blue-700" />
+      </div>
+      <div class="col-span-3">
+        <input type="text" value="${baseCost}" placeholder="Giá vốn" class="v-cost w-full py-1.5 px-2 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand font-mono" />
+      </div>
+      <div class="col-span-1 text-center">
+        <button type="button" class="text-gray-400 hover:text-red-600 p-1 cursor-pointer" onclick="document.getElementById('${vId}').remove()">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+    `;
+    variantsList.appendChild(row);
+
+    const vPriceInput = row.querySelector('.v-price') as HTMLInputElement;
+    const vCostInput = row.querySelector('.v-cost') as HTMLInputElement;
+    [vPriceInput, vCostInput].forEach(inp => {
+      inp?.addEventListener('input', () => {
+        const val = inp.value.replace(/\D/g, '');
+        if (val) inp.value = new Intl.NumberFormat('vi-VN').format(Number(val));
+      });
+    });
+  });
+
+  // ----------------------------------------------------
+  // Xử lý Thêm Mốc Bảo hành
+  // ----------------------------------------------------
+  const addWarrantyBtn = document.getElementById('qpAddWarrantyBtn');
+  const warrantyList = document.getElementById('qpWarrantyList') as HTMLElement;
+  const warrantyEmptyNotice = document.getElementById('qpWarrantyEmptyNotice') as HTMLElement;
+  let warrantyCount = 0;
+
+  addWarrantyBtn?.addEventListener('click', () => {
+    warrantyEmptyNotice?.classList.add('hidden');
+    warrantyCount++;
+    const wId = `wRow_${warrantyCount}`;
+    const row = document.createElement('div');
+    row.id = wId;
+    row.className = 'grid grid-cols-12 gap-2 items-center bg-gray-50/70 p-2.5 rounded-lg border border-gray-200';
+    row.innerHTML = `
+      <div class="col-span-6">
+        <input type="text" placeholder="Tên mốc bảo hành (VD: Tiêu chuẩn, Main, Nguồn...)" class="w-name w-full py-1.5 px-2.5 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand bg-white" value="Bảo hành tiêu chuẩn" />
+      </div>
+      <div class="col-span-5 flex items-center gap-1">
+        <input type="number" min="1" value="3" placeholder="Số lượng" class="w-duration w-20 py-1.5 px-2 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand bg-white font-mono" />
+        <select class="w-unit flex-1 py-1.5 px-2 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand bg-white font-semibold">
+          <option value="thang" selected>Tháng</option>
+          <option value="ngay">Ngày</option>
+          <option value="nam">Năm</option>
+        </select>
+      </div>
+      <div class="col-span-1 text-center">
+        <button type="button" class="text-gray-400 hover:text-red-600 p-1 cursor-pointer" onclick="document.getElementById('${wId}').remove(); if (!document.getElementById('qpWarrantyList').children.length) document.getElementById('qpWarrantyEmptyNotice').classList.remove('hidden');">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+        </button>
+      </div>
+    `;
+    warrantyList.appendChild(row);
+  });
+
+  // ----------------------------------------------------
+  // Xử lý Thêm Mốc Bảo trì định kỳ
+  // ----------------------------------------------------
+  const addMaintenanceBtn = document.getElementById('qpAddMaintenanceBtn');
+  const maintenanceList = document.getElementById('qpMaintenanceList') as HTMLElement;
+  const maintenanceEmptyNotice = document.getElementById('qpMaintenanceEmptyNotice') as HTMLElement;
+  let maintenanceCount = 0;
+
+  addMaintenanceBtn?.addEventListener('click', () => {
+    maintenanceEmptyNotice?.classList.add('hidden');
+    maintenanceCount++;
+    const mId = `mRow_${maintenanceCount}`;
+    const row = document.createElement('div');
+    row.id = mId;
+    row.className = 'grid grid-cols-12 gap-2 items-center bg-gray-50/70 p-2.5 rounded-lg border border-gray-200';
+    row.innerHTML = `
+      <div class="col-span-6">
+        <input type="text" placeholder="Nội dung bảo trì (VD: Vệ sinh máy, Tra keo tản nhiệt...)" class="m-name w-full py-1.5 px-2.5 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand bg-white" value="Bảo trì định kỳ" />
+      </div>
+      <div class="col-span-5 flex items-center gap-1">
+        <input type="number" min="1" value="3" placeholder="Chu kỳ" class="m-duration w-20 py-1.5 px-2 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand bg-white font-mono" />
+        <select class="m-unit flex-1 py-1.5 px-2 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand bg-white font-semibold">
+          <option value="thang" selected>Tháng / lần</option>
+          <option value="nam">Năm / lần</option>
+        </select>
+      </div>
+      <div class="col-span-1 text-center">
+        <button type="button" class="text-gray-400 hover:text-red-600 p-1 cursor-pointer" onclick="document.getElementById('${mId}').remove(); if (!document.getElementById('qpMaintenanceList').children.length) document.getElementById('qpMaintenanceEmptyNotice').classList.remove('hidden');">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+        </button>
+      </div>
+    `;
+    maintenanceList.appendChild(row);
+  });
+
+  // ----------------------------------------------------
+  // Global Mở Modal Tạo Mới
+  // ----------------------------------------------------
+  (window as any).openQuickProductModal = function (presetName?: string) {
+    if (modal) {
+      modal.classList.remove('hidden');
+      if (modalTitle) modalTitle.textContent = 'Tạo hàng hóa';
+      if (saveBtnText) saveBtnText.textContent = 'Lưu';
+
+      if (editProductIdInput) editProductIdInput.value = '';
+      duplicateWarning?.classList.add('hidden');
+      currentDuplicateProduct = null;
+
+      // Reset form
+      (document.getElementById('quickProductForm') as HTMLFormElement)?.reset();
+      (document.getElementById('qpDescriptionEditor') as HTMLElement).innerHTML = '';
+      if (variantsList) variantsList.innerHTML = '';
+      if (variantsContainer) variantsContainer.classList.add('hidden');
+      if (warrantyList) warrantyList.innerHTML = '';
+      if (warrantyEmptyNotice) warrantyEmptyNotice.classList.remove('hidden');
+      if (maintenanceList) maintenanceList.innerHTML = '';
+      if (maintenanceEmptyNotice) maintenanceEmptyNotice.classList.remove('hidden');
+      if (serialBadgeCount) serialBadgeCount.textContent = '0 mã';
+      if (serialListTextarea) {
+        serialListTextarea.placeholder = `Nhập hoặc quét mã bộ vào đây (Mỗi mã 1 dòng hoặc cách nhau bởi dấu phẩy)\nVí dụ:\n777-620001\n777-620002\n777-620003`;
+      }
+
+      // Reset condition
+      const newRadio = document.querySelector('input[name="qpInitialCondition"][value="NEW"]') as HTMLInputElement;
+      if (newRadio) { newRadio.checked = true; updateConditionUI(); }
+
+      hasSerialSelect.value = '0';
+      hasSerialSelect.dispatchEvent(new Event('change'));
+
+      // Mặc định về tab thông tin
+      const infoTabBtn = document.getElementById('qpTabBtnInfo');
+      infoTabBtn?.click();
+
+      const nameInput = document.getElementById('qpName') as HTMLInputElement;
+      if (nameInput) {
+        if (presetName) nameInput.value = presetName;
+        setTimeout(() => nameInput.focus(), 100);
+      }
+    }
+  };
+
+  // ----------------------------------------------------
+  // Global Mở Modal Sửa Hàng Hóa (Edit Product)
+  // ----------------------------------------------------
+  (window as any).openEditProductModal = function (p: any) {
+    if (!modal || !p) return;
+    modal.classList.remove('hidden');
+
+    if (modalTitle) {
+      modalTitle.textContent = `Sửa hàng hóa: ${p.name || ''} (${p.product_code || ''})`;
+    }
+    if (saveBtnText) saveBtnText.textContent = 'Lưu thay đổi';
+
+    if (editProductIdInput) editProductIdInput.value = String(p.id || '');
+    duplicateWarning?.classList.add('hidden');
+    currentDuplicateProduct = null;
+
+    // Reset các danh sách động
+    if (variantsList) variantsList.innerHTML = '';
+    if (variantsContainer) variantsContainer.classList.add('hidden');
+    if (warrantyList) warrantyList.innerHTML = '';
+    if (maintenanceList) maintenanceList.innerHTML = '';
+    warrantyCount = 0;
+    maintenanceCount = 0;
+
+    // Điền thông tin cơ bản
+    const codeInput = document.getElementById('qpCode') as HTMLInputElement;
+    if (codeInput) codeInput.value = p.product_code || '';
+
+    const barcodeInput = document.getElementById('qpBarcode') as HTMLInputElement;
+    if (barcodeInput) barcodeInput.value = p.barcode || '';
+
+    const nameInput = document.getElementById('qpName') as HTMLInputElement;
+    if (nameInput) nameInput.value = p.name || '';
+
+    const catSelect = requireSelect('#qpCategory');
+    if (catSelect) catSelect.value = p.category_id ? String(p.category_id) : '';
+
+    const brandSel = requireSelect('#qpBrand');
+    if (brandSel) {
+      const bName = p.brand || p.brand_name || '';
+      brandSel.value = bName;
+    }
+
+    const unitInput = document.getElementById('qpUnitName') as HTMLInputElement;
+    if (unitInput) unitInput.value = p.unit_name || 'Cái';
+
+    // Cài đặt tình trạng và giá
+    const hasNew = (Number(p.price_cents) > 0) || (p.stock_new != null && Number(p.stock_new) > 0);
+    const hasUsed = (Number(p.price_used_cents) > 0) || (p.stock_used != null && Number(p.stock_used) > 0);
+
+    if (hasNew && hasUsed) {
+      const bothRadio = document.querySelector('input[name="qpInitialCondition"][value="BOTH"]') as HTMLInputElement;
+      if (bothRadio) { bothRadio.checked = true; updateConditionUI(); }
+      const bpn = document.getElementById('qpBothPriceNew') as HTMLInputElement;
+      const bcn = document.getElementById('qpBothCostNew') as HTMLInputElement;
+      const bpu = document.getElementById('qpBothPriceUsed') as HTMLInputElement;
+      const bcu = document.getElementById('qpBothCostUsed') as HTMLInputElement;
+      if (bpn) bpn.value = p.price_cents ? new Intl.NumberFormat('vi-VN').format(p.price_cents) : '0';
+      if (bcn) bcn.value = p.cost_price_cents ? new Intl.NumberFormat('vi-VN').format(p.cost_price_cents) : '0';
+      if (bpu) bpu.value = p.price_used_cents ? new Intl.NumberFormat('vi-VN').format(p.price_used_cents) : '0';
+      if (bcu) bcu.value = p.cost_price_used_cents ? new Intl.NumberFormat('vi-VN').format(p.cost_price_used_cents) : '0';
+    } else if (hasUsed && !hasNew) {
+      const qsdRadio = document.querySelector('input[name="qpInitialCondition"][value="QSD"]') as HTMLInputElement;
+      if (qsdRadio) { qsdRadio.checked = true; updateConditionUI(); }
+      const priceInput = document.getElementById('qpPrice') as HTMLInputElement;
+      const costInput = document.getElementById('qpCost') as HTMLInputElement;
+      if (priceInput) priceInput.value = p.price_used_cents ? new Intl.NumberFormat('vi-VN').format(p.price_used_cents) : '0';
+      if (costInput) costInput.value = p.cost_price_used_cents ? new Intl.NumberFormat('vi-VN').format(p.cost_price_used_cents) : '0';
+    } else {
+      const newRadio = document.querySelector('input[name="qpInitialCondition"][value="NEW"]') as HTMLInputElement;
+      if (newRadio) { newRadio.checked = true; updateConditionUI(); }
+      const priceInput = document.getElementById('qpPrice') as HTMLInputElement;
+      const costInput = document.getElementById('qpCost') as HTMLInputElement;
+      if (priceInput) priceInput.value = p.price_cents ? new Intl.NumberFormat('vi-VN').format(p.price_cents) : '0';
+      if (costInput) costInput.value = p.cost_price_cents ? new Intl.NumberFormat('vi-VN').format(p.cost_price_cents) : '0';
+    }
+
+    const isSerial = Number(p.has_serial) === 1;
+    if (hasSerialSelect) {
+      hasSerialSelect.value = isSerial ? '1' : '0';
+      hasSerialSelect.dispatchEvent(new Event('change'));
+    }
+
+    const stdStock = document.getElementById('qpStandardStock') as HTMLInputElement;
+    if (stdStock) stdStock.value = String(p.stock || 0);
+
+    if (serialListTextarea) {
+      serialListTextarea.value = '';
+      serialListTextarea.placeholder = 'Nhập thêm các mã bộ / Serial mới nếu cần bổ sung...';
+    }
+    updateSerialCount();
+
+    // Tab Mô tả & Ghi chú
+    const descEditor = document.getElementById('qpDescriptionEditor') as HTMLElement;
+    if (descEditor) descEditor.innerHTML = p.description || '';
+
+    const noteInput = document.getElementById('qpInvoiceNote') as HTMLTextAreaElement;
+    if (noteInput) noteInput.value = p.invoice_note || '';
+
+    // Tab Bảo hành & bảo trì
+    let wInfo = p.warranty_info;
+    if (typeof wInfo === 'string') {
+      try { wInfo = JSON.parse(wInfo); } catch (e) { wInfo = null; }
+    }
+
+    if (wInfo?.warranties && Array.isArray(wInfo.warranties) && wInfo.warranties.length > 0) {
+      warrantyEmptyNotice?.classList.add('hidden');
+      wInfo.warranties.forEach((w: any) => {
+        warrantyCount++;
+        const wId = `wRow_${warrantyCount}`;
+        const row = document.createElement('div');
+        row.id = wId;
+        row.className = 'grid grid-cols-12 gap-2 items-center bg-gray-50/70 p-2.5 rounded-lg border border-gray-200';
+        row.innerHTML = `
+          <div class="col-span-6">
+            <input type="text" placeholder="Tên mốc bảo hành" class="w-name w-full py-1.5 px-2.5 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand bg-white" value="${w.name || ''}" />
+          </div>
+          <div class="col-span-5 flex items-center gap-1">
+            <input type="number" min="1" value="${w.duration || 1}" class="w-duration w-20 py-1.5 px-2 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand bg-white font-mono" />
+            <select class="w-unit flex-1 py-1.5 px-2 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand bg-white font-semibold">
+              <option value="thang" ${w.unit === 'thang' ? 'selected' : ''}>Tháng</option>
+              <option value="ngay" ${w.unit === 'ngay' ? 'selected' : ''}>Ngày</option>
+              <option value="nam" ${w.unit === 'nam' ? 'selected' : ''}>Năm</option>
+            </select>
+          </div>
+          <div class="col-span-1 text-center">
+            <button type="button" class="text-gray-400 hover:text-red-600 p-1 cursor-pointer" onclick="document.getElementById('${wId}').remove(); if (!document.getElementById('qpWarrantyList').children.length) document.getElementById('qpWarrantyEmptyNotice').classList.remove('hidden');">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+            </button>
+          </div>
+        `;
+        warrantyList.appendChild(row);
+      });
+    } else {
+      warrantyEmptyNotice?.classList.remove('hidden');
+    }
+
+    if (wInfo?.maintenances && Array.isArray(wInfo.maintenances) && wInfo.maintenances.length > 0) {
+      maintenanceEmptyNotice?.classList.add('hidden');
+      wInfo.maintenances.forEach((m: any) => {
+        maintenanceCount++;
+        const mId = `mRow_${maintenanceCount}`;
+        const row = document.createElement('div');
+        row.id = mId;
+        row.className = 'grid grid-cols-12 gap-2 items-center bg-gray-50/70 p-2.5 rounded-lg border border-gray-200';
+        row.innerHTML = `
+          <div class="col-span-6">
+            <input type="text" placeholder="Nội dung bảo trì" class="m-name w-full py-1.5 px-2.5 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand bg-white" value="${m.name || ''}" />
+          </div>
+          <div class="col-span-5 flex items-center gap-1">
+            <input type="number" min="1" value="${m.duration || 1}" class="m-duration w-20 py-1.5 px-2 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand bg-white font-mono" />
+            <select class="m-unit flex-1 py-1.5 px-2 text-xs border border-gray-300 rounded focus:outline-none focus:border-brand bg-white font-semibold">
+              <option value="thang" ${m.unit === 'thang' ? 'selected' : ''}>Tháng / lần</option>
+              <option value="nam" ${m.unit === 'nam' ? 'selected' : ''}>Năm / lần</option>
+            </select>
+          </div>
+          <div class="col-span-1 text-center">
+            <button type="button" class="text-gray-400 hover:text-red-600 p-1 cursor-pointer" onclick="document.getElementById('${mId}').remove(); if (!document.getElementById('qpMaintenanceList').children.length) document.getElementById('qpMaintenanceEmptyNotice').classList.remove('hidden');">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+            </button>
+          </div>
+        `;
+        maintenanceList.appendChild(row);
+      });
+    } else {
+      maintenanceEmptyNotice?.classList.remove('hidden');
+    }
+
+    // Mặc định về tab thông tin
+    const infoTabBtn = document.getElementById('qpTabBtnInfo');
+    infoTabBtn?.click();
+    setTimeout(() => nameInput?.focus(), 100);
+  };
+
+  (window as any).closeQuickProductModal = function () {
+    if (modal) modal.classList.add('hidden');
+  };
+
+  closeBtn?.addEventListener('click', () => (window as any).closeQuickProductModal());
+  cancelBtn?.addEventListener('click', () => (window as any).closeQuickProductModal());
+
+  // ----------------------------------------------------
+  // Lưu Sản Phẩm (Tạo mới hoặc Cập nhật)
+  // ----------------------------------------------------
+  saveBtn?.addEventListener('click', async () => {
+    const editId = (document.getElementById('qpEditProductId') as HTMLInputElement)?.value;
+    const isEdit = !!editId;
+
+    const nameInput = document.getElementById('qpName') as HTMLInputElement;
+    const name = nameInput?.value.trim();
+    if (!name) {
+      alert('Vui lòng nhập Tên hàng hóa');
+      document.getElementById('qpTabBtnInfo')?.click();
+      nameInput?.focus();
+      return;
+    }
+
+    if (currentDuplicateProduct && !isEdit) {
+      alert(`Hàng hóa "${name}" đã tồn tại trong hệ thống (Mã: ${currentDuplicateProduct.product_code})!\nVui lòng bấm vào nút "👉 Mở sản phẩm này" để sửa/nhập kho, hoặc đổi tên khác để phân biệt.`);
+      document.getElementById('qpTabBtnInfo')?.click();
+      nameInput?.focus();
+      return;
+    }
+
+    const code = (document.getElementById('qpCode') as HTMLInputElement)?.value.trim();
+    const barcode = (document.getElementById('qpBarcode') as HTMLInputElement)?.value.trim();
+    const categoryId = (requireSelect('#qpCategory'))?.value;
+    const brand = (requireSelect('#qpBrand'))?.value;
+    const unitName = (document.getElementById('qpUnitName') as HTMLInputElement)?.value.trim() || 'Cái';
+
+    // Đọc giá theo tình trạng chọn
+    const cond = (document.querySelector('input[name="qpInitialCondition"]:checked') as HTMLInputElement)?.value || 'NEW';
+    let salePrice = 0;
+    let costPrice = 0;
+    let priceUsed = 0;
+    let costUsed = 0;
+
+    if (cond === 'NEW') {
+      salePrice = Number((document.getElementById('qpPrice') as HTMLInputElement)?.value.replace(/\D/g, '')) || 0;
+      costPrice = Number((document.getElementById('qpCost') as HTMLInputElement)?.value.replace(/\D/g, '')) || 0;
+    } else if (cond === 'QSD') {
+      priceUsed = Number((document.getElementById('qpPrice') as HTMLInputElement)?.value.replace(/\D/g, '')) || 0;
+      costUsed = Number((document.getElementById('qpCost') as HTMLInputElement)?.value.replace(/\D/g, '')) || 0;
+    } else { // BOTH
+      salePrice = Number((document.getElementById('qpBothPriceNew') as HTMLInputElement)?.value.replace(/\D/g, '')) || 0;
+      costPrice = Number((document.getElementById('qpBothCostNew') as HTMLInputElement)?.value.replace(/\D/g, '')) || 0;
+      priceUsed = Number((document.getElementById('qpBothPriceUsed') as HTMLInputElement)?.value.replace(/\D/g, '')) || 0;
+      costUsed = Number((document.getElementById('qpBothCostUsed') as HTMLInputElement)?.value.replace(/\D/g, '')) || 0;
+    }
+
+    const hasSerial = Number(hasSerialSelect?.value) || 0;
+    const standardStock = Number((document.getElementById('qpStandardStock') as HTMLInputElement)?.value) || 0;
+
+    // Serial List nếu có
+    const serialText = (document.getElementById('qpSerialList') as HTMLTextAreaElement)?.value || '';
+    const serialCondition = (document.querySelector('input[name="qpSerialCondition"]:checked') as HTMLInputElement)?.value || 'NEW';
+    const rawSerialCodes = serialText.split(/[\n,;]+/).map(c => c.trim()).filter(c => c.length > 0);
+
+    // Thuộc tính / Biến thể nếu có
+    const variantRows = variantsList?.querySelectorAll('div[id^="vRow_"]') || [];
+    const variants: any[] = [];
+    variantRows.forEach((vRow: any) => {
+      const vName = (vRow.querySelector('.v-name') as HTMLInputElement)?.value.trim();
+      const vPrice = Number((vRow.querySelector('.v-price') as HTMLInputElement)?.value.replace(/\D/g, '')) || (salePrice || priceUsed);
+      const vCost = Number((vRow.querySelector('.v-cost') as HTMLInputElement)?.value.replace(/\D/g, '')) || (costPrice || costUsed);
+      if (vName) {
+        variants.push({
+          name: vName,
+          sale_price_cents: vPrice,
+          cost_price_cents: vCost,
+        });
+      }
+    });
+
+    // Tab Mô tả & Ghi chú
+    const description = (document.getElementById('qpDescriptionEditor') as HTMLElement)?.innerHTML.trim() || '';
+    const invoiceNote = (document.getElementById('qpInvoiceNote') as HTMLTextAreaElement)?.value.trim() || '';
+
+    // Tab Bảo hành & Bảo trì
+    const warranties: any[] = [];
+    const warrantyRows = warrantyList?.querySelectorAll('div[id^="wRow_"]') || [];
+    warrantyRows.forEach((wRow: any) => {
+      const wName = (wRow.querySelector('.w-name') as HTMLInputElement)?.value.trim();
+      const wDuration = Number((wRow.querySelector('.w-duration') as HTMLInputElement)?.value) || 0;
+      const wUnit = (requireSelect('.w-unit', wRow))?.value || 'thang';
+      if (wName) {
+        warranties.push({ name: wName, duration: wDuration, unit: wUnit });
+      }
+    });
+
+    const maintenances: any[] = [];
+    const maintenanceRows = maintenanceList?.querySelectorAll('div[id^="mRow_"]') || [];
+    maintenanceRows.forEach((mRow: any) => {
+      const mName = (mRow.querySelector('.m-name') as HTMLInputElement)?.value.trim();
+      const mDuration = Number((mRow.querySelector('.m-duration') as HTMLInputElement)?.value) || 0;
+      const mUnit = (requireSelect('.m-unit', mRow))?.value || 'thang';
+      if (mName) {
+        maintenances.push({ name: mName, duration: mDuration, unit: mUnit });
+      }
+    });
+
+    const payload: any = {
+      id: editId ? Number(editId) : undefined,
+      name,
+      product_code: code || undefined,
+      barcode: barcode || undefined,
+      category_id: categoryId ? Number(categoryId) : undefined,
+      brand: brand || undefined,
+      unit_name: unitName,
+      initial_condition: cond,
+      price_cents: salePrice,
+      cost_price_cents: costPrice,
+      price_used_cents: priceUsed,
+      cost_price_used_cents: costUsed,
+      has_serial: hasSerial,
+      stock: hasSerial ? 0 : standardStock,
+      serials: hasSerial ? rawSerialCodes.map(code => ({ code, condition: cond === 'QSD' ? 'QSD' : serialCondition })) : [],
+      variants,
+      description: description !== '<br>' ? description : '',
+      invoice_note: invoiceNote,
+      warranty_info: (warranties.length > 0 || maintenances.length > 0) ? { warranties, maintenances } : null
+    };
+
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = `
+      <svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline-block" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+      </svg>
+      <span>${isEdit ? 'Đang cập nhật...' : 'Đang lưu...'}</span>
+    `;
+
+    try {
+      const res = await fetch('/api/admin/quick-product', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const json = parseAdminApiResponse(await res.json());
+      if (json.success && json.data) {
+        window.dispatchEvent(new CustomEvent('product-created', { detail: json.data }));
+        (window as any).closeQuickProductModal();
+
+        if (isEdit) {
+          // Báo thành công và tải lại trang ngay
+          window.location.reload();
+        } else {
+          // Reset form tạo mới
+          (document.getElementById('quickProductForm') as HTMLFormElement)?.reset();
+          (document.getElementById('qpDescriptionEditor') as HTMLElement).innerHTML = '';
+          if (variantsList) variantsList.innerHTML = '';
+          if (variantsContainer) variantsContainer.classList.add('hidden');
+          if (warrantyList) warrantyList.innerHTML = '';
+          if (warrantyEmptyNotice) warrantyEmptyNotice.classList.remove('hidden');
+          if (maintenanceList) maintenanceList.innerHTML = '';
+          if (maintenanceEmptyNotice) maintenanceEmptyNotice.classList.remove('hidden');
+          if (serialBadgeCount) serialBadgeCount.textContent = '0 mã';
+        }
+      } else {
+        alert(json.error || 'Lỗi lưu hàng hóa');
+      }
+    } catch (err: any) {
+      alert('Lỗi kết nối: ' + err.message);
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = `
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+        <span>${isEdit ? 'Lưu thay đổi' : 'Lưu'}</span>
+      `;
+    }
+  });
+</script>

@@ -1,0 +1,15 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import { hasPermission } from '../../../features/auth/permissions';
+import { getPosFinancialReport } from '../../../features/reports/financial';
+import { parseDatePreset } from '../../../features/reports/date-utils';
+const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+const range=parseDatePreset('this_month',null,null,new Date(today+'T12:00:00'));
+const report=await getPosFinancialReport(env.DB,range.startDate,range.endDate);
+const canCost=hasPermission(Astro.locals.adminPrincipal,'cost.view');
+const rows=[['Doanh số gộp',report.grossSales],['Giảm giá',report.discount],['Các khoản giảm trừ',report.deductions],['Doanh thu thuần',report.netRevenue]];
+if(canCost)rows.push(['Giá vốn',report.cogs],['Lợi nhuận gộp',report.grossProfit]);
+const money=(v:string|number)=>new Intl.NumberFormat('vi-VN').format(Number(v))+' đ';
+---
+<AdminLayout title="Báo cáo bán hàng" active="reports"><h1 class="text-2xl font-bold mb-4">Báo cáo bán hàng tháng này</h1><p class="mb-4">{range.startDate} đến {range.endDate} · Một cửa hàng, một kho. Kết quả POS tạm tính; không gồm đặt trước chưa giao và đơn web chưa đối chiếu.</p><dl class="grid gap-3 sm:grid-cols-2">{rows.map(([label,value])=><div class="border rounded p-4 bg-white"><dt>{label}</dt><dd class="text-xl font-bold">{money(value)}</dd></div>)}</dl>{!canCost && <p class="my-4">Tài khoản chưa được cấp quyền xem giá vốn và lợi nhuận.</p>}{canCost && <a class="block my-4 underline" href="/admin/reports/financial">Xem báo cáo tài chính chi tiết</a>}</AdminLayout>

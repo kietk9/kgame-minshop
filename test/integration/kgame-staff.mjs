@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import { Miniflare } from 'miniflare';
+import { applyKgameMigrations } from './kgame-migrations.mjs';
+import { createStaff,updateStaff,loginStaff,resolveStaff,logoutStaff } from '../../src/features/auth/staff.ts';
+const mf=new Miniflare({modules:true,script:'export default {fetch(){return new Response("ok")}}',compatibilityDate:'2026-07-20',d1Databases:['DB']});
+const owner={id:null,role:'OWNER',username:'OWNER',name:'Owner'},pw=crypto.randomUUID(),tag='isolated-owner-credential';
+try{
+ const db=await mf.getD1Database('DB');await applyKgameMigrations(db);
+ await createStaff(db,owner,{username:'Staff.One',name:'Same name',password:pw,role:'CASHIER'});
+ await createStaff(db,owner,{username:'staff.two',name:'Same name',password:pw,role:'VIEWER'});
+ const a=await db.prepare("SELECT * FROM staff_accounts WHERE username='staff.one'").first();assert.notEqual(a.password_hash,pw);
+ await assert.rejects(createStaff(db,owner,{username:'STAFF.ONE',name:'Other',password:pw,role:'VIEWER'}));
+ await assert.rejects(createStaff(db,{...owner,role:'CASHIER'},{username:'evil',name:'X',password:pw,role:'CASHIER'}));
+ await assert.rejects(createStaff(db,owner,{username:'evil',name:'X',password:pw,role:'OWNER'}));
+ assert.equal((await db.prepare('SELECT count(*) n FROM staff_account_events').first()).n,2);
+ console.log('✓ S01: unique normalized logins, duplicate display names, hashed passwords and owner-only role management');
+ const token=await loginStaff(db,'STAFF.ONE',pw,tag,1000);assert.ok(token);assert.equal((await resolveStaff(db,token,tag,1001)).role,'CASHIER');
+ assert.equal(await resolveStaff(db,token+'a',tag,1001),null);assert.equal(await resolveStaff(db,token,'changed-owner',1001),null);assert.equal(await resolveStaff(db,token,tag,1000+43200),null);
+ assert.equal((await db.prepare('SELECT token_hash FROM staff_sessions').first()).token_hash===token,false);
+ await logoutStaff(db,token);assert.equal(await resolveStaff(db,token,tag,1001),null);
+ console.log('✓ S02: session expiry, tampering, owner credential rotation and server-side logout revoke access');
+ const live=await loginStaff(db,'staff.one',pw,tag,1100);
+ await updateStaff(db,owner,{id:a.id,role:'VIEWER',enabled:true});assert.equal(await resolveStaff(db,live,tag,1101),null);
+ const changed=await loginStaff(db,'staff.one',pw,tag,1102);assert.equal((await resolveStaff(db,changed,tag,1103)).role,'VIEWER');
+ await updateStaff(db,owner,{id:a.id,role:'VIEWER',enabled:false});assert.equal(await resolveStaff(db,changed,tag,1103),null);assert.equal(await loginStaff(db,'staff.one',pw,tag,1103),null);
+ const nextPw=crypto.randomUUID();await updateStaff(db,owner,{id:a.id,role:'CASHIER',enabled:true,password:nextPw});assert.equal(await loginStaff(db,'staff.one',pw,tag,1104),null);assert.ok(await loginStaff(db,'staff.one',nextPw,tag,1105));
+ console.log('✓ S03: role changes, disabling and password resets revoke old sessions and credentials');
+ for(let i=0;i<5;i++)assert.equal(await loginStaff(db,'staff.two','wrong',tag,1200),null);
+ assert.equal(await loginStaff(db,'staff.two',pw,tag,1201),null);assert.ok(await loginStaff(db,'staff.two',pw,tag,1801));
+ assert.equal(await loginStaff(db,'unknown',pw,tag,1801),null);assert.equal(await loginStaff(db,'staff.two',pw,'',1801),null);
+ console.log('✓ S04: five failed passwords lock login for ten minutes; nonexistent accounts and unconfigured owner cannot log in');
+ const before=(await db.prepare('SELECT * FROM staff_accounts ORDER BY id').all()).results;
+ const sessionsBefore=(await db.prepare('SELECT * FROM staff_sessions ORDER BY token_hash').all()).results;
+ await db.prepare("CREATE TRIGGER fail_staff_audit BEFORE INSERT ON staff_account_events BEGIN SELECT RAISE(ABORT,'audit failed'); END").run();
+ await assert.rejects(updateStaff(db,owner,{id:a.id,role:'VIEWER',enabled:false}));assert.deepEqual((await db.prepare('SELECT * FROM staff_accounts ORDER BY id').all()).results,before);assert.deepEqual((await db.prepare('SELECT * FROM staff_sessions ORDER BY token_hash').all()).results,sessionsBefore);
+ console.log('✓ S05: account update and session revocation roll back when audit cannot be written');
+}finally{await mf.dispose();}

@@ -1,0 +1,67 @@
+import assert from 'node:assert/strict';
+import { Miniflare } from 'miniflare';
+import { applyKgameMigrations } from './kgame-migrations.mjs';
+import { createPosOrder } from '../../src/features/kgame/pos.ts';
+import { returnCustomerGoods } from '../../src/features/kgame/customerReturns.ts';
+import { inspectCustomerReturn } from '../../src/features/kgame/returnInspection.ts';
+import { disposeCustomerReturn } from '../../src/features/kgame/returnDisposal.ts';
+import { getPendingActions } from '../../src/features/kgame/pendingActions.ts';
+import { getPosFinancialReport } from '../../src/features/reports/financial.ts';
+const mf=new Miniflare({modules:true,script:'export default {fetch(){return new Response("ok")}}',compatibilityDate:'2026-07-20',d1Databases:['DB']});
+try{
+ const db=await mf.getD1Database('DB');await applyKgameMigrations(db);
+ await db.prepare("INSERT INTO partners(id,partner_code,name,is_customer) VALUES(921,'RD921','Disposal test',1)").run();let n=0;
+ async function fixture(serial=false,reject=true){
+  const qty=serial?1:4;
+  const pid=(await db.prepare("INSERT INTO products(name,slug,price_cents,currency,stock,stock_new,stock_used,tracking_mode,has_serial,cost_price_cents) VALUES(?,?,100,'vnd',4,4,0,?,?,40)").bind('RD'+(++n),'rd'+n,serial?'CODE':'QUANTITY',serial?1:0).run()).meta.last_row_id;
+  const tid=(await db.prepare("INSERT INTO product_types(product_id,name,tracking_mode,cached_stock_new,cached_stock_used,cost_price_cents) VALUES(?,'Standard',?,4,0,40)").bind(pid,serial?'CODE':'QUANTITY').run()).meta.last_row_id;
+  let uid=null;if(serial)uid=(await db.prepare("INSERT INTO product_units(product_type_id,program_code,condition,availability,owner_type,cost_price_cents) VALUES(?,?,'NEW','IN_STOCK','KGAME',40)").bind(tid,'RD-UNIT-'+n).run()).meta.last_row_id;
+  const sale={request_id:crypto.randomUUID(),customer_id:921,items:[{product_id:pid,product_type_id:tid,product_unit_id:uid,condition:'NEW',quantity:qty,unit_price_cents:100}],payment:{amount_paid_cents:qty*100},shipment:{carrier:'PICKUP'}};
+  const order=await createPosOrder(db,sale),line=await db.prepare('SELECT id FROM order_lines WHERE order_id=?').bind(order.id).first();
+  const receipt=await returnCustomerGoods(db,{order_id:order.id,request_id:crypto.randomUUID(),reason:'Test disposal',confirmed:true,items:[{order_line_id:line.id,quantity:qty}]});
+  const item=await db.prepare('SELECT id FROM customer_return_items WHERE return_id=?').bind(receipt.id).first();
+  if(reject)await inspectCustomerReturn(db,{return_item_id:item.id,quantity:qty,decision:'REJECT',confirmed:true,note:'Confirmed defective',request_id:crypto.randomUUID()});
+  return {pid,tid,uid,order,item,sale};
+ }
+ const input=(f,quantity=1,extra={})=>({return_item_id:f.item.id,quantity,reason:'Confirmed physical disposal',confirmed:true,created_by:'TEST STAFF',request_id:crypto.randomUUID(),...extra});
+ const unchangedTables=['orders','order_lines','payments','cash_transactions','customer_credit_entries','kgame_refund_obligations','products','product_types','inventory_transactions','customer_return_inspections'];
+ async function snapshot(tables=unchangedTables){const result={};for(const t of tables)result[t]=(await db.prepare(`SELECT * FROM ${t} ORDER BY ${t==='kgame_operations'?'operation_key':'id'}`).all()).results;return result;}
+ const f=await fixture(),before=await snapshot(),report=await getPosFinancialReport(db,'2020-01-01','2099-12-31');
+ const request=input(f,2),first=await disposeCustomerReturn(db,request);
+ assert.equal(first.disposal_code,'THL000001');assert.equal((await getPendingActions(db,{kind:'DEFECTIVE'})).summary.defective_quantity,2);
+ assert.deepEqual(await snapshot(),before);assert.deepEqual(await getPosFinancialReport(db,'2020-01-01','2099-12-31'),report);
+ assert.deepEqual(await disposeCustomerReturn(db,request),first);
+ await assert.rejects(disposeCustomerReturn(db,{...request,quantity:1}),/nội dung khác/);
+ await disposeCustomerReturn(db,input(f,2));assert.equal((await getPendingActions(db,{kind:'DEFECTIVE'})).summary.defective_quantity,0);
+ const rows=(await db.prepare('SELECT quantity,original_cost_cents,created_by FROM customer_return_disposals WHERE return_item_id=?').bind(f.item.id).all()).results;
+ assert.deepEqual(rows,[{quantity:2,original_cost_cents:80,created_by:'TEST STAFF'},{quantity:2,original_cost_cents:80,created_by:'TEST STAFF'}]);
+ console.log('✓ RD01: partial/full disposal clears only held defective queue, preserves all money/stock/cost/report history and replays once');
+ const serial=await fixture(true);await disposeCustomerReturn(db,input(serial));
+ assert.equal((await db.prepare('SELECT availability,cost_price_cents FROM product_units WHERE id=?').bind(serial.uid).first()).availability,'DISPOSED');
+ await assert.rejects(createPosOrder(db,{...serial.sale,request_id:crypto.randomUUID()}),/Serial/);
+ console.log('✓ RD02: disposed original serial cannot be sold; no duplicate inventory deduction');
+ const pending=await fixture(false,false),allTables=[...unchangedTables,'product_units','customer_return_items','customer_return_disposals','kgame_operations'];
+ const invalid=await snapshot(allTables);
+ for(const patch of [{quantity:0},{quantity:-1},{quantity:0.5},{quantity:5},{confirmed:false},{reason:''},{return_item_id:999999}])await assert.rejects(disposeCustomerReturn(db,input(pending,1,patch)));
+ await assert.rejects(disposeCustomerReturn(db,input(pending)),/vượt/);assert.deepEqual(await snapshot(allTables),invalid);
+ const badSerial=await fixture(true);await db.prepare("UPDATE product_units SET availability='IN_STOCK' WHERE id=?").bind(badSerial.uid).run();
+ await assert.rejects(disposeCustomerReturn(db,input(badSerial)),/Serial/);
+ await db.prepare("UPDATE product_units SET availability='RETURN_REJECTED',owner_type='CUSTOMER' WHERE id=?").bind(badSerial.uid).run();await assert.rejects(disposeCustomerReturn(db,input(badSerial)),/Serial/);
+ console.log('✓ RD03: pending/unconfirmed/invalid/excess requests and wrong serial custody fail without writes');
+ const race=await fixture();const races=await Promise.allSettled([disposeCustomerReturn(db,input(race,3)),disposeCustomerReturn(db,input(race,3))]);assert.equal(races.filter(r=>r.status==='fulfilled').length,1);
+ assert.equal((await db.prepare('SELECT disposed_quantity FROM customer_return_items WHERE id=?').bind(race.item.id).first()).disposed_quantity,3);
+ const retry=await fixture(true),same=input(retry);const results=await Promise.all([disposeCustomerReturn(db,same),disposeCustomerReturn(db,same)]);assert.deepEqual(results[0],results[1]);
+ const fail=await fixture(true);await db.prepare("CREATE TRIGGER fail_disposal BEFORE INSERT ON kgame_operations WHEN NEW.kind='RETURN_DISPOSAL' BEGIN SELECT RAISE(ABORT,'last disposal write'); END").run();const state=await snapshot(allTables);await assert.rejects(disposeCustomerReturn(db,input(fail)));assert.deepEqual(await snapshot(allTables),state);await db.prepare('DROP TRIGGER fail_disposal').run();
+ console.log('✓ RD04: concurrent partial disposals cannot exceed held goods; simultaneous replay writes once; final failure rolls back serial, counters and receipt');
+ const mixed=await fixture(false,false);
+ await inspectCustomerReturn(db,{return_item_id:mixed.item.id,quantity:2,decision:'REJECT',confirmed:true,note:'Two defective',request_id:crypto.randomUUID()});
+ await disposeCustomerReturn(db,input(mixed,1));
+ await inspectCustomerReturn(db,{return_item_id:mixed.item.id,quantity:2,decision:'RESTOCK',condition:'QSD',confirmed:true,resale_confirmed:true,note:'Remaining two can be sold used',request_id:crypto.randomUUID()});
+ const mixedState=await db.prepare('SELECT quantity,restocked_quantity,rejected_quantity,disposed_quantity FROM customer_return_items WHERE id=?').bind(mixed.item.id).first();
+ assert.deepEqual(mixedState,{quantity:4,restocked_quantity:2,rejected_quantity:2,disposed_quantity:1});
+ assert.equal((await getPendingActions(db,{kind:'DEFECTIVE'})).items.find(i=>i.id===mixed.item.id).quantity,1);
+ await assert.rejects(disposeCustomerReturn(db,input(mixed,2)),/vượt/);
+ console.log('✓ RD07: mixed restock, rejected, disposed and remaining inspection quantities stay independent');
+ const mismatch=await fixture();await db.prepare('UPDATE customer_return_items SET disposed_quantity=1 WHERE id=?').bind(mismatch.item.id).run();await assert.rejects(disposeCustomerReturn(db,input(mismatch)),/Lịch sử tiêu hủy/);
+ console.log('✓ RD05: corrupted disposal counters cannot bypass source history');
+}finally{await mf.dispose();}

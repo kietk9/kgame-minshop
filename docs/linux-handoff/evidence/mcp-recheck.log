@@ -1,0 +1,21 @@
+
+> minshop@0.1.0 mcp:check
+> bash scripts/check-mcp.sh
+
+
+ ⛅️ wrangler 4.118.0 (update available 4.143.0)
+───────────────────────────────────────────────
+▲ [WARNING] Processing mcp/.wrangler-check.XXXXXX.jsonc configuration:
+
+    - "unsafe" fields are experimental and may change or break at any time.
+
+
+Total Upload: 2748.69 KiB / gzip: 511.93 KiB
+Your Worker has access to the following bindings:
+Binding                                                         Resource                  
+env.STORE_MCP (StoreMcp)                                        Durable Object            
+env.DB (minshop-check-db)                                       D1 Database               
+env.MCP_RATE_LIMITER (ratelimit)                                Unsafe Metadata           
+env.STOREFRONT_URL ("https://minshop-check.workers.dev")        Environment Variable      
+
+--dry-run: exiting now.

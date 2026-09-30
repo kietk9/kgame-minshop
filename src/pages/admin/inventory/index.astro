@@ -1,0 +1,253 @@
+---
+import { hasPermission,withoutCosts } from '../../../features/auth/permissions';
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import { listInventoryTransactions } from '../../../features/kgame/db';
+
+const url = new URL(Astro.request.url);
+const typeParam = url.searchParams.get('type') || '';
+const conditionParam = url.searchParams.get('condition') || '';
+const q = url.searchParams.get('q') || '';
+
+let transactions = await listInventoryTransactions(env.DB, {
+  transactionType: typeParam || undefined,
+  condition: conditionParam || undefined,
+  searchQuery: q || undefined,
+  limit: 100,
+});
+
+if(!hasPermission(Astro.locals.adminPrincipal,'cost.view'))transactions=withoutCosts(transactions);
+// Thống kê nhanh
+const totalIn = transactions.filter((t: any) => t.quantity > 0).reduce((acc: number, t: any) => acc + t.quantity, 0);
+const totalOut = transactions.filter((t: any) => t.quantity < 0).reduce((acc: number, t: any) => acc + Math.abs(t.quantity), 0);
+
+function formatNumber(cents: number) {
+  if (!cents || isNaN(cents)) return '0';
+  return new Intl.NumberFormat('en-US').format(cents);
+}
+const formatVnd = formatNumber;
+
+function getTxTypeBadge(type: string) {
+  switch (type) {
+    case 'PURCHASE':
+      return { label: 'Nhập mua hàng', class: 'bg-emerald-100 text-emerald-800 border-emerald-200' };
+    case 'PRODUCTION_OUT':
+      return { label: 'Thành phẩm sản xuất', class: 'bg-purple-100 text-purple-800 border-purple-200' };
+    case 'PRODUCTION_USE':
+      return { label: 'Xuất linh kiện ráp máy', class: 'bg-amber-100 text-amber-800 border-amber-200' };
+    case 'SALE':
+      return { label: 'Xuất bán hàng', class: 'bg-blue-100 text-blue-800 border-blue-200' };
+    case 'REPAIR_USE':
+      return { label: 'Xuất linh kiện sửa chữa', class: 'bg-orange-100 text-orange-800 border-orange-200' };
+    case 'BUYBACK':
+      return { label: 'Nhập thu mua máy cũ', class: 'bg-indigo-100 text-indigo-800 border-indigo-200' };
+    case 'INTERNAL_USE':
+      return { label: 'Xuất dùng nội bộ', class: 'bg-teal-100 text-teal-800 border-teal-200' };
+    case 'DISPOSAL':
+      return { label: 'Xuất hủy hỏng hóc', class: 'bg-rose-100 text-rose-800 border-rose-200' };
+    case 'PURCHASE_CANCEL':
+      return { label: 'Hủy phiếu nhập (Hoàn trả kho)', class: 'bg-rose-100 text-rose-800 border-rose-200' };
+    default:
+      return { label: type, class: 'bg-gray-100 text-gray-800 border-gray-200' };
+  }
+}
+---
+
+<AdminLayout title="Sổ kho & Lịch sử xuất nhập hàng" active="inventory">
+  <div class="mb-6 flex flex-wrap items-center justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold text-gray-900">Sổ kho & Lịch sử xuất nhập hàng</h1>
+      <p class="mt-1 text-sm text-gray-500">
+        Theo dõi chi tiết toàn bộ biến động xuất nhập tồn: nhập mua NCC, xuất bán, ráp combo và xuất hủy nội bộ.
+      </p>
+    </div>
+    <div class="flex items-center gap-2.5">
+      <a
+        href="/admin/inventory/outbound/new"
+        class="inline-flex items-center gap-1.5 rounded-lg border border-line bg-white px-3.5 py-2.5 text-xs font-semibold uppercase tracking-wider text-gray-700 shadow-sm transition hover:bg-gray-50 hover:text-brand"
+      >
+        <svg class="h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+        + Xuất nội bộ / Xuất hủy
+      </a>
+      <a
+        href="/admin/production/new"
+        class="inline-flex items-center gap-1.5 rounded-lg bg-brand px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-white shadow-sm transition hover:bg-brand-hover hover:shadow"
+      >
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        Lắp ráp & Đóng gói
+      </a>
+    </div>
+  </div>
+
+  <!-- Thống kê nhanh -->
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+    <div class="rounded-xl border border-line bg-white p-4 shadow-sm">
+      <div class="text-xs font-semibold uppercase tracking-wider text-gray-400">Tổng giao dịch hiển thị</div>
+      <div class="text-2xl font-bold text-gray-900 mt-1 font-mono">{transactions.length}</div>
+      <div class="text-xs text-gray-500 mt-0.5">Bản ghi nhật ký kho</div>
+    </div>
+    <div class="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 shadow-sm">
+      <div class="text-xs font-semibold uppercase tracking-wider text-emerald-700">Tổng lượng nhập kho (+)</div>
+      <div class="text-2xl font-bold text-emerald-800 mt-1 font-mono">+{totalIn}</div>
+      <div class="text-xs text-emerald-600 mt-0.5">Nhập mua & Ráp thành phẩm</div>
+    </div>
+    <div class="rounded-xl border border-amber-200 bg-amber-50/40 p-4 shadow-sm">
+      <div class="text-xs font-semibold uppercase tracking-wider text-amber-700">Tổng lượng xuất kho (-)</div>
+      <div class="text-2xl font-bold text-amber-800 mt-1 font-mono">-{totalOut}</div>
+      <div class="text-xs text-amber-600 mt-0.5">Xuất bán & Xuất linh kiện ráp/sửa</div>
+    </div>
+  </div>
+
+  <!-- Bộ lọc Sổ kho -->
+  <div class="mb-6 rounded-xl border border-line bg-white p-5 shadow-sm">
+    <form method="get" action="/admin/inventory" class="flex flex-col gap-3 md:flex-row md:items-center">
+      <div class="relative flex-1">
+        <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-gray-400">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        </div>
+        <input
+          type="text"
+          name="q"
+          value={q}
+          placeholder="Tìm theo tên hàng, mã SKU (SP000125), Program Code (777-...)..."
+          class="w-full rounded-lg border border-line bg-gray-50/60 py-2.5 pl-10 pr-4 text-sm text-gray-900 transition focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/10"
+        />
+      </div>
+
+      <div class="w-full md:w-56">
+        <select
+          name="type"
+          class="w-full rounded-lg border border-line bg-gray-50/60 px-3 py-2.5 text-sm text-gray-800 transition focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/10"
+        >
+          <option value="">Tất cả loại giao dịch</option>
+          <option value="PURCHASE" selected={typeParam === 'PURCHASE'}>Nhập mua hàng (PURCHASE)</option>
+          <option value="PRODUCTION_OUT" selected={typeParam === 'PRODUCTION_OUT'}>Thành phẩm sản xuất (PROD_OUT)</option>
+          <option value="PRODUCTION_USE" selected={typeParam === 'PRODUCTION_USE'}>Xuất linh kiện ráp (PROD_USE)</option>
+          <option value="SALE" selected={typeParam === 'SALE'}>Xuất bán hàng (SALE)</option>
+          <option value="INTERNAL_USE" selected={typeParam === 'INTERNAL_USE'}>Xuất dùng nội bộ (INTERNAL_USE)</option>
+          <option value="DISPOSAL" selected={typeParam === 'DISPOSAL'}>Xuất hủy hỏng hóc (DISPOSAL)</option>
+          <option value="REPAIR_USE" selected={typeParam === 'REPAIR_USE'}>Xuất linh kiện sửa (REPAIR_USE)</option>
+          <option value="BUYBACK" selected={typeParam === 'BUYBACK'}>Nhập thu mua cũ (BUYBACK)</option>
+        </select>
+      </div>
+
+      <div class="w-full md:w-44">
+        <select
+          name="condition"
+          class="w-full rounded-lg border border-line bg-gray-50/60 px-3 py-2.5 text-sm text-gray-800 transition focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/10"
+        >
+          <option value="">Tất cả tình trạng</option>
+          <option value="NEW" selected={conditionParam === 'NEW'}>Hàng mới (NEW)</option>
+          <option value="QSD" selected={conditionParam === 'QSD'}>Đã qua sử dụng (QSD)</option>
+        </select>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button
+          type="submit"
+          class="rounded-lg bg-brand px-5 py-2.5 text-xs font-semibold uppercase tracking-wider text-white transition hover:bg-brand-hover"
+        >
+          Lọc
+        </button>
+        <a
+          href="/admin/inventory"
+          class="rounded-lg border border-line px-3 py-2.5 text-xs font-medium text-gray-600 hover:bg-gray-100"
+          title="Đặt lại bộ lọc"
+        >
+          Đặt lại
+        </a>
+      </div>
+    </form>
+  </div>
+
+  <!-- Bảng Sổ kho -->
+  <div class="rounded-xl border border-line bg-white shadow-sm overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-[14.5px]">
+        <thead class="bg-[#f8f9fa] border-b border-line text-[14px] text-gray-700 font-semibold select-none">
+          <tr>
+            <th class="px-4 py-3.5">Thời gian</th>
+            <th class="px-4 py-3.5">Loại giao dịch</th>
+            <th class="px-4 py-3.5">Mã SKU</th>
+            <th class="px-5 py-3.5">Mặt hàng & Phiên bản</th>
+            <th class="px-4 py-3.5">Mã bộ (Program Code)</th>
+            <th class="px-4 py-3.5 text-center">Tình trạng</th>
+            <th class="px-4 py-3.5 text-right">Biến động</th>
+            <th class="px-4 py-3.5 text-right">Giá vốn</th>
+            <th class="px-5 py-3.5">Ghi chú</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-line">
+          {
+            transactions.map((tx: any) => {
+              const badge = getTxTypeBadge(tx.transaction_type);
+              const isPositive = tx.quantity > 0;
+
+              return (
+                <tr class="hover:bg-blue-50/40 transition">
+                  <td class="px-4 py-3.5 whitespace-nowrap text-[13px] text-gray-500">
+                    {tx.created_at}
+                  </td>
+                  <td class="px-4 py-3.5 whitespace-nowrap">
+                    <span class={`rounded px-2 py-0.5 text-[11.5px] font-medium border ${badge.class}`}>
+                      {badge.label}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3.5 whitespace-nowrap text-[14px] font-normal text-gray-700">
+                    {tx.product_code ?? '--'}
+                  </td>
+                  <td class="px-5 py-3.5">
+                    <div class="font-normal text-gray-900 text-[14.5px]">{tx.product_name}</div>
+                    {tx.product_type_name && (
+                      <div class="text-[12px] text-gray-400">Bản {tx.product_type_name}</div>
+                    )}
+                  </td>
+                  <td class="px-4 py-3.5 whitespace-nowrap text-[13.5px] tabular-nums">
+                    {tx.program_code ? (
+                      <a
+                        href={`/admin/units/lookup?code=${encodeURIComponent(tx.program_code)}`}
+                        class="text-blue-600 font-normal hover:underline"
+                        title="Xem lý lịch 360°"
+                      >
+                        {tx.program_code}
+                      </a>
+                    ) : (
+                      <span class="text-gray-400 italic">--</span>
+                    )}
+                  </td>
+                  <td class="px-4 py-3.5 text-center whitespace-nowrap">
+                    <span class={`rounded px-2 py-0.5 text-[11.5px] font-medium ${
+                      tx.condition === 'NEW' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-800 border border-amber-200'
+                    }`}>
+                      {tx.condition === 'NEW' ? 'Mới' : 'QSD'}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3.5 text-right whitespace-nowrap tabular-nums text-[14.5px] font-normal">
+                    <span class={isPositive ? 'text-emerald-600' : 'text-amber-600'}>
+                      {isPositive ? `+${tx.quantity}` : tx.quantity}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3.5 text-right whitespace-nowrap tabular-nums text-[14px] font-normal text-gray-600">
+                    {tx.unit_cost_cents ? formatVnd(tx.unit_cost_cents) : '--'}
+                  </td>
+                  <td class="px-5 py-3.5 text-[13px] text-gray-500 max-w-xs truncate">
+                    {tx.note ?? '--'}
+                  </td>
+                </tr>
+              );
+            })
+          }
+          {
+            transactions.length === 0 && (
+              <tr>
+                <td colspan="9" class="px-6 py-12 text-center text-gray-400 text-sm">
+                  Chưa có giao dịch nào trong sổ kho phù hợp với bộ lọc.
+                </td>
+              </tr>
+            )
+          }
+        </tbody>
+      </table>
+    </div>
+  </div>
+</AdminLayout>

@@ -1,0 +1,48 @@
+import assert from 'node:assert/strict';
+import { Miniflare } from 'miniflare';
+import { applyKgameMigrations } from './kgame-migrations.mjs';
+import { getPendingActions } from '../../src/features/kgame/pendingActions.ts';
+import { createPosOrder } from '../../src/features/kgame/db.ts';
+import { returnCustomerGoods } from '../../src/features/kgame/customerReturns.ts';
+import { inspectCustomerReturn } from '../../src/features/kgame/returnInspection.ts';
+import { settleOrderRefund } from '../../src/features/kgame/orderRefunds.ts';
+const mf=new Miniflare({modules:true,script:'export default {fetch(){return new Response("ok")}}',compatibilityDate:'2026-07-20',d1Databases:['DB']});
+try {
+ const db=await mf.getD1Database('DB');await applyKgameMigrations(db);
+ await db.prepare("INSERT INTO partners(id,partner_code,name,is_customer,is_supplier) VALUES(930,'QUEUE930','Same name',1,1),(931,'QUEUE931','Same name',1,1)").run();
+ const pid=(await db.prepare("INSERT INTO products(name,slug,price_cents,currency,stock,stock_new,stock_used,tracking_mode,cost_price_cents) VALUES('Queue product','queue-product',100,'vnd',10,10,0,'QUANTITY',40)").run()).meta.last_row_id;
+ const order=await createPosOrder(db,{request_id:crypto.randomUUID(),customer_id:930,order_type:'ORDER',items:[{product_id:pid,condition:'NEW',quantity:4,unit_price_cents:100}],payment:{amount_paid_cents:400,payment_method:'CASH'},shipment:{carrier:'PICKUP'}});
+ const line=await db.prepare('SELECT id FROM order_lines WHERE order_id=?').bind(order.id).first();
+ const ret=await returnCustomerGoods(db,{order_id:order.id,request_id:crypto.randomUUID(),reason:'Queue test',confirmed:true,items:[{order_line_id:line.id,quantity:4}]});
+ const ri=await db.prepare('SELECT id FROM customer_return_items WHERE return_id=?').bind(ret.id).first();
+ const inspect=(quantity,decision)=>inspectCustomerReturn(db,{return_item_id:ri.id,quantity,decision,condition:'NEW',note:'Queue inspection',confirmed:true,resale_confirmed:true,request_id:crypto.randomUUID()});
+ await inspect(1,'RESTOCK');await inspect(1,'REJECT');
+ const obligation=await db.prepare("SELECT id FROM kgame_refund_obligations WHERE source_type='ORDER' AND source_id=?").bind(order.id).first();
+ await settleOrderRefund(db,{obligation_id:obligation.id,amount_cents:150,account_type:'CASH',confirmed:true,request_id:crypto.randomUUID()});
+ let q=await getPendingActions(db,{search:'QUEUE930'});
+ assert.deepEqual(q.summary,{count:3,customer_refund:250,supplier_refund:0,inspection_quantity:2,defective_quantity:1});
+ assert.equal(q.items.find(r=>r.kind==='CUSTOMER_REFUND').href,`/admin/orders/${order.id}#refunds`);
+ assert.equal(q.items.find(r=>r.kind==='INSPECTION').href,`/admin/orders/${order.id}#return-inspections`);
+ console.log('✓ Q01: real partial refund and split inspection produce exact outstanding money and quantities');
+ await settleOrderRefund(db,{obligation_id:obligation.id,amount_cents:250,account_type:'CASH',confirmed:true,request_id:crypto.randomUUID()});await inspect(2,'RESTOCK');
+ q=await getPendingActions(db,{search:'QUEUE930'});assert.deepEqual(q.summary,{count:1,customer_refund:0,supplier_refund:0,inspection_quantity:0,defective_quantity:1});
+ console.log('✓ Q02: completed refund and inspection leave queue; rejected goods remain visible');
+ const receipt=(await db.prepare("INSERT INTO purchase_receipts(receipt_code,supplier_id) VALUES('QUEUE-PN',931)").run()).meta.last_row_id;
+ await db.prepare("INSERT INTO kgame_refund_obligations(source_type,source_id,partner_id,flow_type,amount_cents,settled_cents,reason) VALUES('PURCHASE',?,931,'IN',500,200,'Queue supplier')").bind(receipt).run();
+ q=await getPendingActions(db,{search:'Same name'});assert.equal(q.summary.count,2);assert.equal(q.summary.supplier_refund,300);assert.deepEqual(new Set(q.items.map(r=>r.partner_id)),new Set([930,931]));
+ assert.equal(q.items.find(r=>r.kind==='SUPPLIER_REFUND').href,`/admin/purchases/${receipt}#refunds`);
+ assert.equal((await getPendingActions(db,{search:'QUEUE930',kind:'SUPPLIER_REFUND'})).summary.count,0);
+ assert.equal((await getPendingActions(db,{search:'%'})).summary.count,0);
+ assert.equal((await getPendingActions(db,{search:"' OR 1=1 --"})).summary.count,0);
+ console.log('✓ Q03: duplicate names remain distinct; directional totals, kind filters and literal search work');
+ await db.prepare("UPDATE kgame_refund_obligations SET partner_id=931,amount_cents=410,reason='Wrong partner' WHERE id=?").bind(obligation.id).run();
+ await db.prepare("INSERT INTO kgame_refund_obligations(source_type,source_id,partner_id,flow_type,amount_cents,reason) VALUES('RETURN',98765,930,'OUT',20,'Unknown source'),('ORDER',98766,930,'OUT',30,'Missing source')").run();
+ for(const search of ['Wrong partner','Unknown source','Missing source']){q=await getPendingActions(db,{search});assert.equal(q.items.length,1);assert.equal(q.items[0].href,null);}
+ console.log('✓ Q04: missing, unsupported or mismatched sources remain visible without misleading links');
+ await db.batch(Array.from({length:55},(_,i)=>db.prepare("INSERT INTO kgame_refund_obligations(source_type,source_id,partner_id,flow_type,amount_cents,reason,created_at) VALUES('RETURN',?,930,'OUT',10,'Pagination','2026-01-01')").bind(99000+i)));
+ const first=await getPendingActions(db,{search:'Pagination'}),second=await getPendingActions(db,{search:'Pagination',page:2});
+ assert.equal(first.items.length,50);assert.equal(second.items.length,5);assert.equal(first.summary.customer_refund,550);assert.deepEqual(first.summary,second.summary);assert.equal(new Set([...first.items,...second.items].map(r=>r.id)).size,55);
+ assert.equal((await getPendingActions(db,{search:'Pagination',page:-1,kind:'INVALID'})).page,1);
+ assert.equal((await getPendingActions(db,{search:'Pagination',page:3})).items.length,0);
+ console.log('✓ Q05: pagination stays stable, totals cover all pages, invalid filters and empty pages are safe');
+} finally {await mf.dispose();}

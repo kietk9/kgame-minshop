@@ -1,0 +1,427 @@
+---
+// Component Modal Đối Tác Dùng Chung Cho Toàn Hệ Thống
+// Hỗ trợ cả Khách Hàng và Nhà Cung Cấp, tích hợp địa chỉ 3 cấp và bóc tách tự động
+interface Props {
+  defaultType?: 'CUSTOMER' | 'SUPPLIER' | 'BOTH';
+  modalId?: string;
+}
+
+const { defaultType = 'CUSTOMER', modalId = 'partnerModal' } = Astro.props;
+---
+
+<div id={modalId} class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 hidden">
+  <div class="w-full max-w-lg bg-white rounded-2xl border border-line shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+    <!-- MODAL HEADER -->
+    <div class="px-5 py-4 bg-brand text-white flex items-center justify-between">
+      <h3 id={`${modalId}Title`} class="font-bold text-base flex items-center gap-2">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
+        <span>Thêm Đối Tác Mới</span>
+      </h3>
+      <button type="button" class="btn-close-partner-modal text-white/80 hover:text-white transition p-1 cursor-pointer">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <!-- MODAL BODY -->
+    <form id={`${modalId}Form`} class="p-5 space-y-4 overflow-y-auto flex-1 text-xs">
+      <input type="hidden" name="id" id={`${modalId}Id`} value="" />
+
+      <!-- 2 CỜ PHÂN LOẠI VAI TRÒ ĐỐI TÁC (CHUẨN ERP/KIOTVIET) -->
+      <div class="p-3 bg-gray-50 rounded-xl border border-line flex items-center justify-between gap-4">
+        <span class="font-bold text-gray-700">Phân loại đối tác:</span>
+        <div class="flex items-center gap-4">
+          <label class="flex items-center gap-1.5 cursor-pointer select-none font-semibold text-blue-900">
+            <input
+              type="checkbox"
+              name="is_customer"
+              id={`${modalId}IsCustomer`}
+              checked={defaultType === 'CUSTOMER' || defaultType === 'BOTH'}
+              class="w-4 h-4 rounded text-brand focus:ring-brand"
+            />
+            <span>Khách hàng</span>
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer select-none font-semibold text-indigo-900">
+            <input
+              type="checkbox"
+              name="is_supplier"
+              id={`${modalId}IsSupplier`}
+              checked={defaultType === 'SUPPLIER' || defaultType === 'BOTH'}
+              class="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
+            />
+            <span>Nhà cung cấp</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- TÊN & SỐ ĐIỆN THOẠI -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label class="block font-semibold text-gray-700 mb-1">Tên đối tác <span class="text-red-500">*</span></label>
+          <input
+            type="text"
+            name="name"
+            id={`${modalId}Name`}
+            required
+            placeholder="VD: Anh Tuấn, Cty SEGA..."
+            class="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand font-medium"
+          />
+        </div>
+        <div>
+          <label class="block font-semibold text-gray-700 mb-1">Số điện thoại <span class="text-red-500">*</span></label>
+          <input
+            type="tel"
+            name="phone"
+            id={`${modalId}Phone`}
+            required
+            placeholder="090..."
+            class="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand"
+          />
+        </div>
+      </div>
+
+      <!-- EMAIL & MÃ SỐ THUẾ -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label class="block font-semibold text-gray-700 mb-1">Email</label>
+          <input
+            type="email"
+            name="email"
+            id={`${modalId}Email`}
+            placeholder="doitac@gmail.com..."
+            class="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand"
+          />
+        </div>
+        <div>
+          <label class="block font-semibold text-gray-700 mb-1">Mã số thuế / CCCD</label>
+          <input
+            type="text"
+            name="tax_code"
+            id={`${modalId}TaxCode`}
+            placeholder="MST doanh nghiệp hoặc CCCD..."
+            class="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand"
+          />
+        </div>
+      </div>
+
+      <!-- KHỐI ĐỊA CHỈ -->
+      <div class="p-3.5 rounded-xl bg-blue-50/50 border border-blue-200 space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-bold text-blue-900 flex items-center gap-1.5">
+            📍 Địa chỉ
+          </span>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <!-- TỈNH / TP AUTOCOMPLETE -->
+          <div class="relative">
+            <label class="block text-[11px] font-medium text-gray-700 mb-1">
+              Tỉnh / Thành phố
+            </label>
+            <input
+              type="text"
+              name="province"
+              id={`${modalId}Province`}
+              autocomplete="off"
+              placeholder="Gõ tìm: Đồng Nai, HCM..."
+              class="w-full rounded-md border border-line bg-white px-2.5 py-1.5 text-xs text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand"
+            />
+            <div
+              id={`${modalId}ProvSug`}
+              class="absolute left-0 right-0 top-full mt-1 max-h-40 overflow-y-auto rounded-lg border border-line bg-white shadow-xl z-50 hidden text-xs divide-y divide-gray-100"
+            ></div>
+          </div>
+
+          <!-- PHƯỜNG / XÃ AUTOCOMPLETE -->
+          <div class="relative">
+            <label class="block text-[11px] font-medium text-gray-700 mb-1">
+              Phường / Xã <span class="text-brand">(Tự lọc theo tỉnh)</span>
+            </label>
+            <input
+              type="text"
+              name="ward"
+              id={`${modalId}Ward`}
+              autocomplete="off"
+              placeholder="Tự lọc theo tỉnh..."
+              class="w-full rounded-md border border-line bg-white px-2.5 py-1.5 text-xs text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand"
+            />
+            <div
+              id={`${modalId}WardSug`}
+              class="absolute left-0 right-0 top-full mt-1 max-h-40 overflow-y-auto rounded-lg border border-line bg-white shadow-xl z-50 hidden text-xs divide-y divide-gray-100"
+            ></div>
+          </div>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label class="block text-[11px] font-medium text-gray-700">
+              Số nhà, tên đường, khu phố / thôn / ấp
+            </label>
+            <span id={`${modalId}ParseBadge`} class="hidden text-[10px] font-semibold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-200">
+              ✨ Đã tự động bóc Tỉnh &amp; Phường
+            </span>
+          </div>
+          <input
+            type="text"
+            name="address_detail"
+            id={`${modalId}AddressDetail`}
+            placeholder="Dán nguyên địa chỉ gửi vào đây..."
+            class="w-full rounded-md border border-line bg-white px-2.5 py-1.5 text-xs text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand"
+          />
+          <div class="text-[10px] text-blue-600 mt-1 flex items-center gap-1">
+            <span>💡 Dán nguyên địa chỉ (VD: <em>123 Đường 2/3, Thị Trấn Tân Thạnh, Long An</em>), hệ thống sẽ tự động tách!</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- GHI CHÚ ĐỐI TÁC -->
+      <div>
+        <label class="block font-semibold text-gray-700 mb-1">Ghi chú đối tác</label>
+        <textarea
+          name="note"
+          id={`${modalId}Note`}
+          rows="2"
+          placeholder="Thói quen giao dịch, tài khoản ngân hàng, yêu cầu kỹ thuật..."
+          class="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand"
+        ></textarea>
+      </div>
+
+      <!-- MODAL FOOTER -->
+      <div class="pt-3 border-t border-line flex items-center justify-end gap-2">
+        <button
+          type="button"
+          class="btn-close-partner-modal px-4 py-2 rounded-lg border border-line text-xs font-semibold text-gray-700 hover:bg-gray-50 transition cursor-pointer"
+        >
+          Hủy
+        </button>
+        <button
+          type="submit"
+          id={`${modalId}SubmitBtn`}
+          class="px-5 py-2 rounded-lg bg-brand text-white text-xs font-bold hover:bg-blue-700 shadow transition cursor-pointer"
+        >
+          Lưu Đối Tác
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script define:vars={{ modalId }}>
+  (function initPartnerModal() {
+    const modal = document.getElementById(modalId);
+    if (!modal) return;
+
+    const form = document.getElementById(`${modalId}Form`);
+    const titleEl = document.getElementById(`${modalId}Title`);
+    const idInput = document.getElementById(`${modalId}Id`);
+    const nameInput = document.getElementById(`${modalId}Name`);
+    const phoneInput = document.getElementById(`${modalId}Phone`);
+    const emailInput = document.getElementById(`${modalId}Email`);
+    const taxInput = document.getElementById(`${modalId}TaxCode`);
+    const isCustInput = document.getElementById(`${modalId}IsCustomer`);
+    const isSuppInput = document.getElementById(`${modalId}IsSupplier`);
+    const provInput = document.getElementById(`${modalId}Province`);
+    const wardInput = document.getElementById(`${modalId}Ward`);
+    const addrInput = document.getElementById(`${modalId}AddressDetail`);
+    const noteInput = document.getElementById(`${modalId}Note`);
+    const parseBadge = document.getElementById(`${modalId}ParseBadge`);
+
+    const provSug = document.getElementById(`${modalId}ProvSug`);
+    const wardSug = document.getElementById(`${modalId}WardSug`);
+
+    // Đóng modal
+    modal.querySelectorAll('.btn-close-partner-modal').forEach((btn) => {
+      btn.addEventListener('click', () => modal.classList.add('hidden'));
+    });
+
+    // Mở modal để tạo mới
+    window.addEventListener(`open-${modalId}`, (e) => {
+      if (form) form.reset();
+      if (idInput) idInput.value = '';
+      if (parseBadge) parseBadge.classList.add('hidden');
+      if (titleEl) titleEl.innerHTML = '<span>➕ Thêm Đối Tác Mới</span>';
+
+      const detail = e.detail || {};
+      if (detail.is_supplier !== undefined && isSuppInput) isSuppInput.checked = detail.is_supplier;
+      if (detail.is_customer !== undefined && isCustInput) isCustInput.checked = detail.is_customer;
+      if (detail.name && nameInput) nameInput.value = detail.name;
+      if (detail.phone && phoneInput) phoneInput.value = detail.phone;
+
+      modal.classList.remove('hidden');
+    });
+
+    // Mở modal để sửa đối tác
+    window.addEventListener(`edit-${modalId}`, (e) => {
+      const p = e.detail || {};
+      if (idInput) idInput.value = p.id || '';
+      if (nameInput) nameInput.value = p.name || '';
+      if (phoneInput) phoneInput.value = p.phone || '';
+      if (emailInput) emailInput.value = p.email || '';
+      if (taxInput) taxInput.value = p.tax_code || '';
+      if (isCustInput) isCustInput.checked = Boolean(p.is_customer);
+      if (isSuppInput) isSuppInput.checked = Boolean(p.is_supplier);
+      if (provInput) provInput.value = p.province || '';
+      if (wardInput) wardInput.value = p.ward || '';
+      if (addrInput) addrInput.value = p.address_detail || p.address || '';
+      if (noteInput) noteInput.value = p.note || '';
+      if (parseBadge) parseBadge.classList.add('hidden');
+      if (titleEl) titleEl.innerHTML = `<span>✏️ Sửa Đối Tác: ${p.name || ''}</span>`;
+
+      modal.classList.remove('hidden');
+    });
+
+    // Form submit qua API /api/admin/partners
+    form?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const payload = {
+        id: idInput?.value ? Number(idInput.value) : undefined,
+        name: nameInput?.value?.trim(),
+        phone: phoneInput?.value?.trim(),
+        email: emailInput?.value?.trim() || null,
+        tax_code: taxInput?.value?.trim() || null,
+        is_customer: isCustInput ? isCustInput.checked : true,
+        is_supplier: isSuppInput ? isSuppInput.checked : false,
+        province: provInput?.value?.trim() || null,
+        ward: wardInput?.value?.trim() || null,
+        address_detail: addrInput?.value?.trim() || null,
+        note: noteInput?.value?.trim() || null,
+      };
+
+      if (!payload.name) {
+        alert('Vui lòng nhập tên đối tác');
+        return;
+      }
+
+      if (!payload.is_customer && !payload.is_supplier) {
+        alert('Vui lòng chọn ít nhất một vai trò: Khách hàng hoặc Nhà cung cấp');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/admin/partners', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const result = await res.json();
+        if (result.success) {
+          modal.classList.add('hidden');
+          // Dispatch event để các trang bên ngoài (nhập hàng, bán hàng, danh bạ) tự động reload/chọn
+          window.dispatchEvent(new CustomEvent('partner-saved', { detail: { ...payload, id: result.data.id, partner_code: result.data.partner_code } }));
+        } else {
+          alert('Lỗi: ' + (result.error || 'Không thể lưu đối tác'));
+        }
+      } catch (err) {
+        alert('Lỗi kết nối: ' + err.message);
+      }
+    });
+
+    // Smart Autocomplete Địa Chỉ 3 Cấp
+    let cachedGeo = null;
+    async function getGeo() {
+      if (cachedGeo) return cachedGeo;
+      try {
+        const r = await fetch('/api/admin/geo');
+        cachedGeo = await r.json();
+      } catch (e) {
+        cachedGeo = { provinces: [] };
+      }
+      return cachedGeo;
+    }
+
+    provInput?.addEventListener('input', async () => {
+      const q = provInput.value.trim().toLowerCase();
+      if (!q) { provSug?.classList.add('hidden'); return; }
+      const geo = await getGeo();
+      const matches = geo.provinces?.filter((p) => p.name.toLowerCase().includes(q)) || [];
+      if (provSug) {
+        if (matches.length === 0) {
+          provSug.classList.add('hidden');
+        } else {
+          provSug.innerHTML = matches.slice(0, 8).map((p) => `
+            <div class="px-2.5 py-1.5 hover:bg-blue-50 cursor-pointer font-medium prov-opt" data-name="${p.name}">
+              ${p.name}
+            </div>
+          `).join('');
+          provSug.classList.remove('hidden');
+        }
+      }
+    });
+
+    provSug?.addEventListener('click', (e) => {
+      const target = e.target.closest('.prov-opt');
+      if (target && provInput) {
+        provInput.value = target.getAttribute('data-name');
+        provSug.classList.add('hidden');
+      }
+    });
+
+    wardInput?.addEventListener('input', async () => {
+      const q = wardInput.value.trim().toLowerCase();
+      const currentProv = provInput?.value.trim().toLowerCase();
+      if (!q) { wardSug?.classList.add('hidden'); return; }
+      const geo = await getGeo();
+      let targetProv = geo.provinces?.find((p) => p.name.toLowerCase() === currentProv);
+      if (!targetProv && geo.provinces) {
+        targetProv = geo.provinces.find((p) => currentProv.includes(p.name.toLowerCase()));
+      }
+      const wardList = targetProv ? targetProv.wards : geo.provinces?.flatMap((p) => p.wards) || [];
+      const matches = wardList.filter((w) => (typeof w === 'string' ? w : w.name).toLowerCase().includes(q));
+
+      if (wardSug) {
+        if (matches.length === 0) {
+          wardSug.classList.add('hidden');
+        } else {
+          wardSug.innerHTML = matches.slice(0, 10).map((w) => {
+            const wName = typeof w === 'string' ? w : w.name;
+            return `
+              <div class="px-2.5 py-1.5 hover:bg-blue-50 cursor-pointer font-medium ward-opt" data-name="${wName}">
+                ${wName}
+              </div>
+            `;
+          }).join('');
+          wardSug.classList.remove('hidden');
+        }
+      }
+    });
+
+    wardSug?.addEventListener('click', (e) => {
+      const target = e.target.closest('.ward-opt');
+      if (target && wardInput) {
+        wardInput.value = target.getAttribute('data-name');
+        wardSug.classList.add('hidden');
+      }
+    });
+
+    // Dán tự động bóc tách Tỉnh & Phường
+    addrInput?.addEventListener('paste', () => {
+      setTimeout(async () => {
+        const text = addrInput.value.trim();
+        if (text.length < 10) return;
+        const geo = await getGeo();
+        for (const p of geo.provinces || []) {
+          if (text.toLowerCase().includes(p.name.toLowerCase())) {
+            if (provInput) provInput.value = p.name;
+            for (const w of p.wards || []) {
+              const wName = typeof w === 'string' ? w : w.name;
+              if (text.toLowerCase().includes(wName.toLowerCase())) {
+                if (wardInput) wardInput.value = wName;
+                break;
+              }
+            }
+            if (parseBadge) parseBadge.classList.remove('hidden');
+            break;
+          }
+        }
+      }, 100);
+    });
+
+    document.addEventListener('click', (e) => {
+      if (provSug && !provSug.contains(e.target) && e.target !== provInput) {
+        provSug.classList.add('hidden');
+      }
+      if (wardSug && !wardSug.contains(e.target) && e.target !== wardInput) {
+        wardSug.classList.add('hidden');
+      }
+    });
+  })();
+</script>

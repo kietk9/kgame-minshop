@@ -1,0 +1,339 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import { lookupProgramCode360, listRecentProductUnits } from '../../../features/kgame/db';
+
+const codeQuery = Astro.url.searchParams.get('code') ?? '';
+const timeline = codeQuery ? await lookupProgramCode360(env.DB, codeQuery) : null;
+const recentUnits = await listRecentProductUnits(env.DB, 20);
+
+// Helper tính số ngày còn lại
+function getDaysRemaining(expiryDate: string | null) {
+  if (!expiryDate) return null;
+  const now = new Date();
+  const exp = new Date(expiryDate);
+  const diffTime = exp.getTime() - now.getTime();
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+}
+
+function formatNumber(cents: number) {
+  if (!cents || isNaN(cents)) return '0';
+  return new Intl.NumberFormat('en-US').format(cents);
+}
+const formatVnd = formatNumber;
+---
+
+<AdminLayout title="Tra cứu Serial / Program Code" active="units">
+  <div class="mb-6">
+    <div class="flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl font-bold text-gray-900">Tra cứu Serial / Program Code</h1>
+        <p class="mt-1 text-sm text-gray-500">Tra cứu vòng đời máy, hồ sơ bảo hành, thời hạn kỹ thuật và lịch sử sửa chữa/bán hàng theo từng Serial/IMEI hoặc Program Code.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Search Box -->
+  <div class="mb-8 rounded-xl border border-line bg-white p-6 shadow-sm">
+    <form method="get" action="/admin/units/lookup" class="flex flex-col gap-4 sm:flex-row sm:items-center">
+      <div class="relative flex-1">
+        <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-gray-400">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+        </div>
+        <input
+          type="text"
+          name="code"
+          value={codeQuery}
+          placeholder="Nhập mã Serial, IMEI hoặc Program Code (Ví dụ: 777-62020834, 777-61720911)..."
+          class="w-full rounded-lg border border-line bg-gray-50/50 py-3.5 pl-11 pr-4 text-base font-normal text-gray-900 transition focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/10"
+          autofocus
+        />
+      </div>
+      <button
+        type="submit"
+        class="inline-flex items-center justify-center rounded-lg bg-brand px-6 py-3.5 text-sm font-semibold uppercase tracking-wider text-white shadow-sm transition hover:bg-brand-hover hover:shadow focus:outline-none"
+      >
+        Tra cứu ngay
+      </button>
+    </form>
+
+    <div class="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+      <span>Mã mẫu thử nghiệm:</span>
+      <a href="/admin/units/lookup?code=777-62020834" class="rounded bg-gray-100 px-2 py-1 font-normal text-gray-700 hover:bg-gray-200">777-62020834 (Mới, hạn 400d)</a>
+      <a href="/admin/units/lookup?code=777-62020835" class="rounded bg-gray-100 px-2 py-1 font-normal text-gray-700 hover:bg-gray-200">777-62020835 (Mới)</a>
+      <a href="/admin/units/lookup?code=777-61720911" class="rounded bg-amber-50 px-2 py-1 font-normal text-amber-800 hover:bg-amber-100">777-61720911 (Cũ thu mua)</a>
+    </div>
+  </div>
+
+  {codeQuery && !timeline && (
+    <div class="mb-8 rounded-xl border border-red-200 bg-red-50 p-6 text-center text-red-700">
+      <svg class="mx-auto mb-2 h-8 w-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+      </svg>
+      <p class="font-medium text-lg">Không tìm thấy mã bộ: <span class="font-normal text-red-900">{codeQuery}</span></p>
+      <p class="mt-1 text-sm text-red-600">Vui lòng kiểm tra lại định dạng mã hoặc xem danh sách các mã bộ đang có dưới đây.</p>
+    </div>
+  )}
+
+  {timeline && (
+    <div class="space-y-8">
+      {/* 1. Device Profile Card */}
+      <div class="rounded-xl border border-line bg-white shadow-sm overflow-hidden">
+        <div class="border-b border-line bg-gray-50/70 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+          <div class="flex items-center gap-3">
+            <span class="rounded-md bg-brand px-3 py-1 text-sm font-normal text-white tracking-wider">
+              {timeline.unit.program_code}
+            </span>
+            <span class={`rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wider ${
+              timeline.unit.condition === 'NEW' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+            }`}>
+              {timeline.unit.condition === 'NEW' ? 'Mới 100%' : 'Đã qua sử dụng (QSD)'}
+            </span>
+            <span class={`rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wider ${
+              timeline.unit.availability === 'IN_STOCK' ? 'bg-blue-100 text-blue-800' :
+              timeline.unit.availability === 'RESERVED' ? 'bg-purple-100 text-purple-800' :
+              timeline.unit.availability === 'SOLD' ? 'bg-gray-100 text-gray-800' : 'bg-orange-100 text-orange-800'
+            }`}>
+              {timeline.unit.availability === 'IN_STOCK' ? 'Sẵn bán' :
+               timeline.unit.availability === 'RESERVED' ? 'Đang giữ cho đơn' :
+               timeline.unit.availability === 'SOLD' ? 'Đã bán' : timeline.unit.availability === 'RETURN_REJECTED' ? 'Hàng trả lỗi, không bán' : timeline.unit.availability === 'RETURN_INSPECTION' ? 'Hàng trả chờ kiểm tra' : timeline.unit.availability === 'RETURNED_SUPPLIER' ? 'Đã trả NCC' : timeline.unit.availability}
+            </span>
+          </div>
+
+          <div class="text-right text-xs text-gray-500">
+            Ngày khởi tạo: <span class="font-medium text-gray-900">{timeline.unit.created_at}</span>
+          </div>
+        </div>
+
+        <div class="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div>
+            <div class="text-xs uppercase tracking-wider text-gray-400 font-medium">Hàng hóa & Phân loại</div>
+            <div class="mt-1 font-semibold text-gray-900 text-lg">{timeline.unit.product_name}</div>
+            <div class="text-sm text-gray-600">Phân loại: <span class="font-bold text-brand">{timeline.unit.product_type_name}</span></div>
+            <div class="text-xs text-gray-500 mt-0.5">Mã SP: {timeline.unit.product_code ?? 'N/A'} • {timeline.unit.category_name}</div>
+          </div>
+
+          <div>
+            <div class="text-xs uppercase tracking-wider text-gray-400 font-medium">Chủ sở hữu & Vị trí</div>
+            <div class="mt-1 font-semibold text-gray-900">
+              {timeline.unit.owner_type === 'KGAME' ? 'Kho Trung Kiên Game' : (timeline.unit.owner_name ?? (timeline.unit.owner_type === 'SUPPLIER' ? 'Nhà cung cấp' : 'Khách lẻ'))}
+            </div>
+            {timeline.unit.owner_phone && (
+              <div class="text-sm text-gray-600">SĐT: {timeline.unit.owner_phone}</div>
+            )}
+            <div class="text-xs text-gray-500 mt-0.5">Vị trí: <span class="font-normal text-gray-700 bg-gray-100 px-1.5 py-0.5 rounded">{timeline.unit.location_id ?? 'KHO_CHINH'}</span></div>
+          </div>
+
+          <!-- Secret Expiry info -->
+          <div class="rounded-lg bg-amber-50/60 border border-amber-100 p-3">
+            <div class="flex items-center justify-between text-xs uppercase tracking-wider text-amber-800 font-bold">
+              <span>Thời hạn ẩn (USB Key)</span>
+              <span class="rounded bg-amber-200/70 px-1 text-[10px]">Chỉ Admin</span>
+            </div>
+            <div class="mt-1 flex items-baseline gap-2">
+              <span class="text-2xl font-semibold tabular-nums text-amber-950">{timeline.unit.expiry_days ?? '--'}</span>
+              <span class="text-xs text-amber-800 font-medium">ngày nạp</span>
+            </div>
+            {timeline.unit.expiry_date && (
+              <div class="text-xs text-amber-900 mt-1">
+                Hạn đến: <span class="font-bold">{timeline.unit.expiry_date}</span>
+                {(() => {
+                  const rem = getDaysRemaining(timeline.unit.expiry_date);
+                  return rem !== null ? (
+                    <span class={`ml-1 font-semibold ${rem > 30 ? 'text-emerald-700' : 'text-red-600'}`}>
+                      (còn ~{rem} ngày)
+                    </span>
+                  ) : null;
+                })()}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div class="text-xs uppercase tracking-wider text-gray-400 font-medium">Giá bán & Giá vốn</div>
+            <div class="mt-1 font-semibold text-brand text-lg">
+              {formatVnd(timeline.unit.target_sale_price_cents ?? 0)}
+            </div>
+            <div class="text-xs text-gray-500 mt-0.5">Giá vốn: {formatVnd(timeline.unit.cost_price_cents || 0)}</div>
+            {timeline.unit.note && (
+              <div class="text-xs italic text-gray-600 mt-2 bg-gray-50 p-1.5 rounded">
+                Ghi chú: {timeline.unit.note}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 2. Timeline Events */}
+      <div class="rounded-xl border border-line bg-white p-6 shadow-sm">
+        <h2 class="text-lg font-semibold text-gray-900 mb-6 flex items-center gap-2">
+          <svg class="w-5 h-5 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          Dòng thời gian sự kiện 360 (Vòng đời mã {timeline.unit.program_code})
+        </h2>
+
+        <div class="relative border-l-2 border-brand/20 ml-4 space-y-6 pb-2">
+          {/* Sổ kho transactions */}
+          {timeline.transactions.map((tx) => (
+            <div class="relative pl-6">
+              <div class="absolute -left-[9px] top-1 h-4 w-4 rounded-full border-2 border-white bg-brand shadow-sm"></div>
+              <div class="rounded-lg border border-line/80 bg-gray-50/50 p-4 transition hover:bg-gray-50">
+                <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div class="flex items-center gap-2">
+                    <span class="rounded bg-brand/10 px-2 py-0.5 font-bold uppercase tracking-wider text-brand">
+                      {tx.transaction_type}
+                    </span>
+                    <span class="font-semibold text-gray-900">
+                      Biến động kho: {tx.quantity > 0 ? `+${tx.quantity}` : tx.quantity} ({tx.condition})
+                    </span>
+                  </div>
+                  <span class="text-gray-400">{tx.created_at}</span>
+                </div>
+                <div class="mt-2 text-sm text-gray-700 font-medium">{tx.note}</div>
+                <div class="mt-1 flex gap-4 text-xs text-gray-500">
+                  <span>Giá vốn: {formatVnd(tx.unit_cost_cents || 0)}</span>
+                  <span>Vị trí: {tx.location_id}</span>
+                  {tx.created_by && <span>Bởi: {tx.created_by}</span>}
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {/* Đơn hàng bán */}
+          {timeline.orders.map((ord) => (
+            <div class="relative pl-6">
+              <div class="absolute -left-[9px] top-1 h-4 w-4 rounded-full border-2 border-white bg-emerald-600 shadow-sm"></div>
+              <div class="rounded-lg border border-emerald-200 bg-emerald-50/40 p-4">
+                <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span class="rounded bg-emerald-100 px-2 py-0.5 font-bold uppercase tracking-wider text-emerald-800">
+                    BÁN HÀNG (SALE)
+                  </span>
+                  <span class="text-gray-400">{ord.created_at}</span>
+                </div>
+                <div class="mt-2 text-sm font-semibold text-gray-900">
+                  Bán cho khách: {ord.customer_name} ({ord.customer_phone})
+                </div>
+                <div class="mt-1 text-xs text-gray-600">
+                  Đơn hàng: <span class="font-mono">{ord.order_code ?? ord.id}</span> • Giá bán: {formatVnd(ord.unit_price_cents)} • Trạng thái: {ord.order_status}
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {/* Phiếu sửa chữa */}
+          {timeline.repairs.map((rep) => (
+            <div class="relative pl-6">
+              <div class="absolute -left-[9px] top-1 h-4 w-4 rounded-full border-2 border-white bg-purple-600 shadow-sm"></div>
+              <div class="rounded-lg border border-purple-200 bg-purple-50/40 p-4">
+                <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span class="rounded bg-purple-100 px-2 py-0.5 font-bold uppercase tracking-wider text-purple-800">
+                    SỬA CHỮA: {rep.ticket_code}
+                  </span>
+                  <span class="text-gray-400">{rep.received_at}</span>
+                </div>
+                <div class="mt-2 text-sm font-semibold text-gray-900">
+                  Lỗi khách báo: <span class="font-normal text-red-600">{rep.problem_reported}</span>
+                </div>
+                <div class="mt-1 text-xs text-gray-600">
+                  Chẩn đoán: {rep.diagnosis ?? 'Đang kiểm tra'} • Giá sửa: {formatVnd(rep.repair_price_cents)} • Trạng thái: {rep.status}
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {/* Thu mua lại */}
+          {timeline.buybacks.map((bb) => (
+            <div class="relative pl-6">
+              <div class="absolute -left-[9px] top-1 h-4 w-4 rounded-full border-2 border-white bg-amber-600 shadow-sm"></div>
+              <div class="rounded-lg border border-amber-200 bg-amber-50/40 p-4">
+                <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span class="rounded bg-amber-100 px-2 py-0.5 font-bold uppercase tracking-wider text-amber-800">
+                    THU MUA LẠI: {bb.buyback_code}
+                  </span>
+                  <span class="text-gray-400">{bb.created_at}</span>
+                </div>
+                <div class="mt-2 text-sm font-semibold text-gray-900">
+                  Thu lại từ khách: {bb.customer_name} ({bb.customer_phone})
+                </div>
+                <div class="mt-1 text-xs text-gray-600">
+                  Giá thu: {formatVnd(bb.purchase_price_cents)} • Tình trạng: {bb.condition}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )}
+
+  <!-- 3. Recent Units Table -->
+  <div class="mt-10 rounded-xl border border-line bg-white shadow-sm overflow-hidden">
+    <div class="border-b border-line bg-gray-50/70 px-6 py-4 flex items-center justify-between">
+      <h2 class="text-base font-semibold text-gray-900">Danh sách mã bộ Program Code gần đây</h2>
+      <span class="text-xs text-gray-500">Hiển thị {recentUnits.length} mã mới nhất</span>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-[14.5px]">
+        <thead class="bg-[#f8f9fa] border-b border-line text-[14px] text-gray-700 font-semibold select-none">
+          <tr>
+            <th class="px-6 py-3">Program Code</th>
+            <th class="px-6 py-3">Hàng hóa & Bản</th>
+            <th class="px-6 py-3">Tình trạng</th>
+            <th class="px-6 py-3">Khả năng bán</th>
+            <th class="px-6 py-3">Hạn ẩn (ngày)</th>
+            <th class="px-6 py-3">Chủ sở hữu</th>
+            <th class="px-6 py-3 text-right">Thao tác</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-line">
+          {recentUnits.map((u) => (
+            <tr class="hover:bg-blue-50/40 transition">
+              <td class="px-6 py-4 text-[14px] text-blue-600 font-normal whitespace-nowrap">
+                <a href={`/admin/units/lookup?code=${encodeURIComponent(u.program_code)}`} class="hover:underline">
+                  {u.program_code}
+                </a>
+              </td>
+              <td class="px-6 py-4">
+                <div class="font-normal text-gray-900 text-[14.5px]">{u.product_name}</div>
+                <div class="text-[12px] text-gray-400">Bản {u.product_type_name} • {u.category_name}</div>
+              </td>
+              <td class="px-6 py-4">
+                <span class={`rounded px-2 py-0.5 text-[11.5px] font-medium uppercase ${
+                  u.condition === 'NEW' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                }`}>
+                  {u.condition === 'NEW' ? 'Mới' : 'QSD'}
+                </span>
+              </td>
+              <td class="px-6 py-4">
+                <span class={`rounded px-2 py-0.5 text-[11.5px] font-medium ${
+                  u.availability === 'IN_STOCK' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-700'
+                }`}>
+                  {u.availability === 'IN_STOCK' ? 'Sẵn bán' : u.availability === 'RETURN_REJECTED' ? 'Hàng trả lỗi, không bán' : u.availability === 'RETURN_INSPECTION' ? 'Hàng trả chờ kiểm tra' : u.availability === 'RETURNED_SUPPLIER' ? 'Đã trả NCC' : u.availability}
+                </span>
+              </td>
+              <td class="px-6 py-4 tabular-nums text-[13.5px]">
+                <span class="font-medium text-amber-800">{u.expiry_days ? `${u.expiry_days} ngày` : '--'}</span>
+                {u.expiry_date && <span class="text-gray-400 block text-[12px]">{u.expiry_date}</span>}
+              </td>
+              <td class="px-6 py-4 text-[13.5px] text-gray-600">
+                {u.owner_type === 'KGAME' ? 'Kho KGAME' : u.owner_name}
+              </td>
+              <td class="px-6 py-4 text-right">
+                <a
+                  href={`/admin/units/lookup?code=${encodeURIComponent(u.program_code)}`}
+                  class="rounded border border-line bg-white px-2.5 py-1 text-[13px] font-medium text-gray-700 shadow-xs hover:bg-gray-50 hover:text-brand"
+                >
+                  Xem 360°
+                </a>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</AdminLayout>

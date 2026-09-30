@@ -1,0 +1,6 @@
+---
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { permissionKeys,permissionLabels,hasPermission } from '../../features/auth/permissions';
+const principal=Astro.locals.adminPrincipal;
+---
+<AdminLayout title="Quyền của tôi"><h1 class="text-2xl font-bold mb-4">Quyền của {principal?.name}</h1><p class="mb-4">Chỉ chủ cửa hàng được thay đổi quyền. Khi quyền thay đổi, bạn cần đăng nhập lại.</p><ul class="space-y-2">{permissionKeys.map(p=><li>{hasPermission(principal,p)?'✓ Được phép':'— Chưa được cấp'} · {permissionLabels[p]}</li>)}</ul></AdminLayout>

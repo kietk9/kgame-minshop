@@ -1,0 +1,339 @@
+---
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import { env } from 'cloudflare:workers';
+import { listRepairTickets, getRepairStats } from '../../../features/kgame/db';
+
+export const prerender = false;
+
+const search = Astro.url.searchParams.get('search') ?? '';
+const status = Astro.url.searchParams.get('status') ?? 'ALL';
+const location = Astro.url.searchParams.get('location') ?? 'ALL';
+const ownerType = Astro.url.searchParams.get('owner_type') ?? 'ALL';
+
+const [{ tickets, total }, stats] = await Promise.all([
+  listRepairTickets(env.DB, {
+    status,
+    location,
+    ownerType,
+    search,
+    limit: 50,
+  }),
+  getRepairStats(env.DB),
+]);
+
+const formatNumber = (cents: number) => {
+  if (!cents || isNaN(cents)) return '0';
+  return new Intl.NumberFormat('en-US').format(cents);
+};
+const formatVND = formatNumber;
+
+const getStatusBadge = (s: string) => {
+  switch (s) {
+    case 'RECEIVED':
+      return { label: 'Tiếp nhận mới', bg: 'bg-amber-100 text-amber-800 border-amber-300' };
+    case 'DIAGNOSING':
+      return { label: 'Đang kiểm tra', bg: 'bg-blue-100 text-blue-800 border-blue-300' };
+    case 'QUOTED':
+      return { label: 'Đã báo giá', bg: 'bg-indigo-100 text-indigo-800 border-indigo-300' };
+    case 'APPROVED':
+      return { label: 'Khách đồng ý', bg: 'bg-purple-100 text-purple-800 border-purple-300' };
+    case 'REPAIRING':
+      return { label: 'Đang sửa chữa', bg: 'bg-orange-100 text-orange-800 border-orange-300' };
+    case 'SENT_TO_PARTNER':
+      return { label: 'Gửi đối tác ngoài', bg: 'bg-rose-100 text-rose-800 border-rose-300' };
+    case 'TESTING':
+      return { label: 'Đang chạy Test', bg: 'bg-cyan-100 text-cyan-800 border-cyan-300' };
+    case 'READY_FOR_RETURN':
+      return { label: 'Chờ trả khách', bg: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
+    case 'COMPLETED':
+      return { label: 'Hoàn tất', bg: 'bg-zinc-100 text-zinc-700 border-zinc-300' };
+    case 'CANCELLED':
+      return { label: 'Hủy sửa', bg: 'bg-red-100 text-red-700 border-red-300' };
+    default:
+      return { label: s, bg: 'bg-zinc-100 text-zinc-700 border-zinc-200' };
+  }
+};
+---
+
+<AdminLayout title="Quản lý Sửa chữa & Bảo hành" active="repairs">
+  <div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h1 class="text-2xl font-bold tracking-tight text-ink sm:text-3xl">Phiếu Sửa chữa & Bảo hành</h1>
+        <p class="mt-1 text-sm text-zinc-500">
+          Theo dõi chu trình tiếp nhận, phân loại máy khách/KGAME, sửa nội bộ hoặc gửi đối tác, xuất linh kiện kho.
+        </p>
+      </div>
+      <div class="flex items-center gap-3">
+        <a
+          href="/admin/repairs/new"
+          class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+        >
+          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+          </svg>
+          + Tiếp nhận máy sửa mới
+        </a>
+      </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
+      <a
+        href="/admin/repairs?status=RECEIVED"
+        class={`rounded-xl border p-4 transition-all hover:border-zinc-400 ${status === 'RECEIVED' ? 'border-amber-500 bg-amber-50/50' : 'border-zinc-200 bg-white'}`}
+      >
+        <div class="text-xs font-medium text-zinc-500">Tiếp nhận mới</div>
+        <div class="mt-1 text-2xl font-bold text-amber-600">{stats.received_count}</div>
+      </a>
+      <a
+        href="/admin/repairs?location=INTERNAL"
+        class={`rounded-xl border p-4 transition-all hover:border-zinc-400 ${location === 'INTERNAL' ? 'border-orange-500 bg-orange-50/50' : 'border-zinc-200 bg-white'}`}
+      >
+        <div class="text-xs font-medium text-zinc-500">Sửa nội bộ</div>
+        <div class="mt-1 text-2xl font-bold text-orange-600">{stats.internal_repair_count}</div>
+      </a>
+      <a
+        href="/admin/repairs?location=EXTERNAL"
+        class={`rounded-xl border p-4 transition-all hover:border-zinc-400 ${location === 'EXTERNAL' ? 'border-rose-500 bg-rose-50/50' : 'border-zinc-200 bg-white'}`}
+      >
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-zinc-500">Gửi đối tác ngoài</span>
+          {stats.partner_overdue_count > 0 && (
+            <span class="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700 animate-pulse">
+              {stats.partner_overdue_count} trễ hẹn
+            </span>
+          )}
+        </div>
+        <div class="mt-1 text-2xl font-bold text-rose-600">{stats.partner_repair_count}</div>
+      </a>
+      <a
+        href="/admin/repairs?status=TESTING"
+        class={`rounded-xl border p-4 transition-all hover:border-zinc-400 ${status === 'TESTING' ? 'border-cyan-500 bg-cyan-50/50' : 'border-zinc-200 bg-white'}`}
+      >
+        <div class="text-xs font-medium text-zinc-500">Đang chạy Test</div>
+        <div class="mt-1 text-2xl font-bold text-cyan-600">{stats.testing_count}</div>
+      </a>
+      <a
+        href="/admin/repairs?status=READY_FOR_RETURN"
+        class={`rounded-xl border p-4 transition-all hover:border-zinc-400 ${status === 'READY_FOR_RETURN' ? 'border-emerald-500 bg-emerald-50/50' : 'border-zinc-200 bg-white'}`}
+      >
+        <div class="text-xs font-medium text-zinc-500">Chờ trả khách</div>
+        <div class="mt-1 text-2xl font-bold text-emerald-600">{stats.ready_return_count}</div>
+      </a>
+    </div>
+
+    <!-- Filter & Search Toolbar -->
+    <div class="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+      <form method="GET" class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div class="flex flex-wrap items-center gap-3 flex-1">
+          <!-- Search input -->
+          <div class="relative min-w-[260px] flex-1 max-w-md">
+            <input
+              type="text"
+              name="search"
+              value={search}
+              placeholder="Tìm mã SC, Tên khách, SĐT, Mã bộ, Game..."
+              class="w-full rounded-lg border border-zinc-300 py-2 pl-9 pr-3 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+            />
+            <svg class="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+
+          <!-- Filter Owner -->
+          <select
+            name="owner_type"
+            class="rounded-lg border border-zinc-300 py-2 px-3 text-sm focus:border-zinc-900 focus:outline-none"
+            onchange="this.form.submit()"
+          >
+            <option value="ALL" selected={ownerType === 'ALL'}>-- Nguồn gốc máy --</option>
+            <option value="CUSTOMER" selected={ownerType === 'CUSTOMER'}>Hàng của Khách</option>
+            <option value="KGAME" selected={ownerType === 'KGAME'}>Hàng của KGAME</option>
+          </select>
+
+          <!-- Filter Location -->
+          <select
+            name="location"
+            class="rounded-lg border border-zinc-300 py-2 px-3 text-sm focus:border-zinc-900 focus:outline-none"
+            onchange="this.form.submit()"
+          >
+            <option value="ALL" selected={location === 'ALL'}>-- Nơi sửa chữa --</option>
+            <option value="INTERNAL" selected={location === 'INTERNAL'}>Sửa nội bộ</option>
+            <option value="EXTERNAL" selected={location === 'EXTERNAL'}>Gửi đối tác ngoài</option>
+          </select>
+
+          <!-- Filter Status -->
+          <select
+            name="status"
+            class="rounded-lg border border-zinc-300 py-2 px-3 text-sm focus:border-zinc-900 focus:outline-none"
+            onchange="this.form.submit()"
+          >
+            <option value="ALL" selected={status === 'ALL'}>-- Tất cả trạng thái --</option>
+            <option value="RECEIVED" selected={status === 'RECEIVED'}>Tiếp nhận mới</option>
+            <option value="DIAGNOSING" selected={status === 'DIAGNOSING'}>Đang kiểm tra</option>
+            <option value="QUOTED" selected={status === 'QUOTED'}>Đã báo giá</option>
+            <option value="REPAIRING" selected={status === 'REPAIRING'}>Đang sửa chữa</option>
+            <option value="TESTING" selected={status === 'TESTING'}>Đang Test</option>
+            <option value="READY_FOR_RETURN" selected={status === 'READY_FOR_RETURN'}>Chờ trả khách</option>
+            <option value="COMPLETED" selected={status === 'COMPLETED'}>Hoàn tất</option>
+          </select>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button
+            type="submit"
+            class="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800"
+          >
+            Lọc kết quả
+          </button>
+          {(search || status !== 'ALL' || location !== 'ALL' || ownerType !== 'ALL') && (
+            <a
+              href="/admin/repairs"
+              class="rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-50"
+            >
+              Đặt lại
+            </a>
+          )}
+        </div>
+      </form>
+    </div>
+
+    <!-- Table -->
+    <div class="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-zinc-200 text-left text-[14.5px]">
+          <thead class="bg-[#f8f9fa] text-[14px] font-semibold text-gray-700 border-b border-line select-none">
+            <tr>
+              <th class="px-4 py-3">Mã phiếu</th>
+              <th class="px-4 py-3">Chủ máy</th>
+              <th class="px-4 py-3">Thiết bị & Mã bộ</th>
+              <th class="px-4 py-3">Hiện tượng / Lỗi</th>
+              <th class="px-4 py-3">Nơi sửa</th>
+              <th class="px-4 py-3">Trạng thái</th>
+              <th class="px-4 py-3 text-right">Chi phí vốn</th>
+              <th class="px-4 py-3 text-right">Giá báo khách</th>
+              <th class="px-4 py-3 text-center">Thao tác</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-zinc-100">
+            {tickets.length === 0 ? (
+              <tr>
+                <td colspan="9" class="px-4 py-12 text-center text-zinc-500">
+                  <div class="mx-auto max-w-sm">
+                    <p class="font-medium text-zinc-700">Chưa có phiếu sửa chữa nào</p>
+                    <p class="mt-1 text-xs text-zinc-500">Tạo phiếu tiếp nhận mới khi khách mang máy đến hoặc bảo dưỡng máy KGAME.</p>
+                    <a
+                      href="/admin/repairs/new"
+                      class="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-zinc-900 px-4 py-2 text-xs font-semibold text-white hover:bg-zinc-800"
+                    >
+                      + Tạo phiếu tiếp nhận
+                    </a>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              tickets.map((t) => {
+                const badge = getStatusBadge(t.status);
+                const isOverdue = t.repair_location === 'EXTERNAL' && t.expected_receive_at && new Date(t.expected_receive_at) < new Date() && !t.actual_received_at && t.status !== 'COMPLETED';
+
+                return (
+                  <tr class="transition-colors hover:bg-blue-50/40">
+                    <td class="px-4 py-3.5 whitespace-nowrap text-[14px]">
+                      <a href={`/admin/repairs/${t.id}`} class="text-blue-600 font-normal hover:underline">
+                        {t.ticket_code}
+                      </a>
+                    </td>
+                    <td class="px-4 py-3.5">
+                      {t.owner_type === 'CUSTOMER' ? (
+                        <div>
+                          <div class="font-normal text-zinc-900 text-[14.5px]">{t.customer_name || 'Khách vãng lai'}</div>
+                          {t.customer_phone && (
+                            <div class="text-[12px] text-zinc-400">{t.customer_phone}</div>
+                          )}
+                          <span class="inline-block mt-0.5 rounded px-1.5 py-0.2 text-[10.5px] font-medium bg-sky-50 text-sky-700 border border-sky-200">
+                            Hàng khách
+                          </span>
+                        </div>
+                      ) : (
+                        <div>
+                          <span class="inline-block rounded px-2 py-0.5 text-xs font-medium bg-purple-100 text-purple-800 border border-purple-200">
+                            Kho KGAME
+                          </span>
+                        </div>
+                      )}
+                    </td>
+                    <td class="px-4 py-3.5">
+                      <div class="font-normal text-zinc-900 text-[14.5px]">
+                        {t.product_name ? (
+                          <>
+                            {t.product_name}
+                            {t.product_type_name && <span class="text-zinc-500 font-normal"> ({t.product_type_name})</span>}
+                          </>
+                        ) : (
+                          t.unidentified_product_name || 'Chưa định danh'
+                        )}
+                      </div>
+                      {t.program_code && (
+                        <div class="mt-0.5">
+                          <span class="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] tabular-nums font-medium text-amber-900 border border-amber-200">
+                            🔑 {t.program_code}
+                          </span>
+                        </div>
+                      )}
+                    </td>
+                    <td class="px-4 py-3.5 max-w-xs truncate text-zinc-700 text-[13px]" title={t.problem_reported}>
+                      <span class="line-clamp-2">{t.problem_reported}</span>
+                    </td>
+                    <td class="px-4 py-3.5 whitespace-nowrap text-[13px]">
+                      {t.repair_location === 'INTERNAL' ? (
+                        <span class="inline-flex items-center gap-1 text-zinc-700 font-normal">
+                          🏠 Sửa nội bộ
+                        </span>
+                      ) : (
+                        <div>
+                          <span class="inline-flex items-center gap-1 font-medium text-rose-700">
+                            🚚 {t.external_partner || 'Đối tác ngoài'}
+                          </span>
+                          {t.expected_receive_at && (
+                            <div class={`text-[11px] ${isOverdue ? 'text-red-600 font-bold' : 'text-zinc-400'}`}>
+                              Hẹn: {t.expected_receive_at}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td class="px-4 py-3.5 whitespace-nowrap">
+                      <span class={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11.5px] font-medium ${badge.bg}`}>
+                        {badge.label}
+                      </span>
+                    </td>
+                    <td class="px-4 py-3.5 text-right tabular-nums text-[14px] font-normal text-zinc-600">
+                      {formatVND(t.repair_cost_cents + (t.partner_cost_cents || 0))}
+                    </td>
+                    <td class="px-4 py-3.5 text-right tabular-nums text-[14.5px] font-normal text-zinc-900">
+                      {formatVND(t.repair_price_cents)}
+                    </td>
+                    <td class="px-4 py-3.5 text-center whitespace-nowrap">
+                      <a
+                        href={`/admin/repairs/${t.id}`}
+                        class="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900"
+                      >
+                        Chi tiết / Xử lý →
+                      </a>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div class="border-t border-zinc-200 bg-zinc-50 px-4 py-3 text-xs text-zinc-500 flex justify-between items-center">
+        <span>Tổng cộng: <strong class="text-zinc-800">{total}</strong> phiếu</span>
+        <span>Hiển thị tối đa 50 phiếu gần nhất</span>
+      </div>
+    </div>
+  </div>
+</AdminLayout>

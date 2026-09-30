@@ -1,0 +1,390 @@
+---
+import { env } from 'cloudflare:workers';
+import { getBuybackById } from '../../../../features/kgame/db';
+
+export const prerender = false;
+
+const rawId = Astro.params.id;
+let buybackId = Number(rawId);
+
+if (isNaN(buybackId)) {
+  const match = await env.DB.prepare('SELECT id FROM buybacks WHERE buyback_code = ? LIMIT 1').bind(rawId).first<{ id: number }>();
+  if (match) buybackId = match.id;
+}
+
+if (!buybackId) {
+  return new Response('Không tìm thấy phiếu thu mua', { status: 404 });
+}
+
+const buyback = await getBuybackById(env.DB, buybackId);
+
+if (!buyback) {
+  return new Response('Không tìm thấy phiếu thu mua', { status: 404 });
+}
+
+const formatNumber = (val: number) => {
+  if (!val || isNaN(val)) return '0';
+  return new Intl.NumberFormat('en-US').format(val);
+};
+const formatVND = formatNumber;
+
+const formatDate = (iso: string) => {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
+  } catch {
+    return iso;
+  }
+};
+---
+
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Biên bản thu mua {buyback.buyback_code} — Trung Kiên Game</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 12mm 15mm;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #111827;
+      background: #fff;
+      margin: 0;
+      padding: 20px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .print-card {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 2px solid #2563eb;
+      padding-bottom: 12px;
+      margin-bottom: 16px;
+    }
+    .brand-name {
+      font-size: 20px;
+      font-weight: 800;
+      color: #1e40af;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .brand-sub {
+      font-size: 12px;
+      color: #4b5563;
+      margin-top: 2px;
+    }
+    .brand-contact {
+      font-size: 11px;
+      color: #6b7280;
+      margin-top: 4px;
+    }
+    .title-box {
+      text-align: right;
+    }
+    .main-title {
+      font-size: 17px;
+      font-weight: 800;
+      color: #111827;
+      text-transform: uppercase;
+    }
+    .doc-code {
+      font-size: 15px;
+      font-weight: 700;
+      color: #dc2626;
+      margin-top: 2px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    .doc-date {
+      font-size: 11px;
+      color: #6b7280;
+      margin-top: 2px;
+    }
+    .party-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 16px;
+      background: #f9fafb;
+      padding: 12px 14px;
+      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+    }
+    .party-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #374151;
+      margin-bottom: 6px;
+      border-bottom: 1px solid #e5e7eb;
+      padding-bottom: 4px;
+    }
+    .party-info {
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 16px;
+    }
+    th {
+      background: #f3f4f6;
+      color: #374151;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 8px 10px;
+      border: 1px solid #e5e7eb;
+      text-align: left;
+    }
+    td {
+      padding: 8px 10px;
+      border: 1px solid #e5e7eb;
+      font-size: 12px;
+    }
+    .text-center { text-align: center; }
+    .text-right { text-align: right; }
+    .code-badge {
+      display: inline-block;
+      font-family: ui-monospace, monospace;
+      font-weight: 700;
+      font-size: 11px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid #bfdbfe;
+    }
+    .summary-box {
+      margin-left: auto;
+      width: 320px;
+      margin-bottom: 16px;
+    }
+    .summary-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      font-size: 12px;
+    }
+    .summary-total {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      font-size: 15px;
+      font-weight: 800;
+      color: #dc2626;
+      border-top: 2px solid #e5e7eb;
+      margin-top: 4px;
+    }
+    .terms-box {
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 11px;
+      color: #92400e;
+      margin-bottom: 24px;
+      line-height: 1.5;
+    }
+    .terms-title {
+      font-weight: 700;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+    }
+    .terms-box ol {
+      margin: 0;
+      padding-left: 18px;
+    }
+    .signature-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      text-align: center;
+      margin-top: 20px;
+      page-break-inside: avoid;
+    }
+    .sig-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #111827;
+    }
+    .sig-sub {
+      font-size: 11px;
+      color: #6b7280;
+      font-style: italic;
+      margin-top: 2px;
+    }
+    .sig-space {
+      height: 70px;
+    }
+    .sig-name {
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .no-print-bar {
+      background: #1e293b;
+      color: #fff;
+      padding: 10px 20px;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+      z-index: 999;
+    }
+    @media print {
+      .no-print-bar { display: none !important; }
+      body { padding: 0 !important; background: transparent !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print-bar">
+    <div style="font-weight:600; font-size:13px;">
+      Xem trước Biên bản thu mua: <span style="color:#60a5fa;">{buyback.buyback_code}</span>
+    </div>
+    <div style="display:flex; gap:10px;">
+      <button onclick="window.print()" style="background:#2563eb; color:#fff; border:none; padding:6px 14px; border-radius:6px; font-weight:600; font-size:12px; cursor:pointer;">
+        🖨️ In Biên Bản Ngay
+      </button>
+      <button onclick="window.close()" style="background:#475569; color:#fff; border:none; padding:6px 12px; border-radius:6px; font-size:12px; cursor:pointer;">
+        Đóng
+      </button>
+    </div>
+  </div>
+
+  <div class="print-card" style="margin-top: 30px;">
+    <!-- HEADER -->
+    <div class="header">
+      <div>
+        <div class="brand-name">Trung Kiên Game (Kgame)</div>
+        <div class="brand-sub">Chuyên Cung Cấp, Sản Xuất, Sửa Chữa &amp; Thu Mua Máy Bắn Cá Toàn Quốc</div>
+        <div class="brand-contact">
+          Hotline / Zalo: <strong>090x.xxx.xxx</strong> • Địa chỉ: Xưởng Kgame, TP. Hồ Chí Minh
+        </div>
+      </div>
+      <div class="title-box">
+        <div class="main-title">Biên Bản Bàn Giao &amp; Thu Mua</div>
+        <div class="doc-code">{buyback.buyback_code}</div>
+        <div class="doc-date">Ngày lập: {formatDate(buyback.created_at)}</div>
+      </div>
+    </div>
+
+    <!-- THÔNG TIN 2 BÊN -->
+    <div class="party-grid">
+      <div>
+        <div class="party-title">Bên Thu Mua (Bên A):</div>
+        <div class="party-info">
+          <div><strong>Đơn vị:</strong> TRUNG KIÊN GAME (KGAME)</div>
+          <div><strong>Đại diện:</strong> Kỹ thuật tiếp nhận Kgame</div>
+          <div><strong>Sổ Quỹ:</strong> Chứng từ chi {buyback.cash_transaction_code || 'Tiền mặt'}</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="party-title">Bên Bàn Giao / Bán Lại (Bên B):</div>
+        <div class="party-info">
+          <div><strong>Họ và tên:</strong> {buyback.customer_name || 'Khách thanh lý'}</div>
+          {buyback.customer_phone && <div><strong>Điện thoại:</strong> {buyback.customer_phone}</div>}
+          {buyback.customer_address && <div><strong>Địa chỉ:</strong> {buyback.customer_address}</div>}
+        </div>
+      </div>
+    </div>
+
+    <!-- BẢNG DANH SÁCH MẶT HÀNG THU MUA -->
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 35px;" class="text-center">STT</th>
+          <th>Tên Máy / Linh Kiện Bàn Giao</th>
+          <th>Mã Bộ (Program Code)</th>
+          <th class="text-center" style="width: 50px;">SL</th>
+          <th>Tình Trạng Kỹ Thuật</th>
+          <th class="text-right" style="width: 110px;">Đơn Giá Thu</th>
+          <th class="text-right" style="width: 110px;">Thành Tiền</th>
+        </tr>
+      </thead>
+      <tbody>
+        {buyback.items.map((it: any, idx: number) => (
+          <tr>
+            <td class="text-center">{idx + 1}</td>
+            <td>
+              <strong>{it.product_name}</strong>
+              <div style="font-size:11px; color:#4b5563;">{it.type_name || 'Tiêu chuẩn'}</div>
+            </td>
+            <td>
+              {it.program_code ? (
+                <span class="code-badge">{it.program_code}</span>
+              ) : (
+                <span style="font-size:11px; color:#6b7280;">Hàng số lượng</span>
+              )}
+            </td>
+            <td class="text-center font-bold">{it.quantity}</td>
+            <td style="font-size:11px; color:#374151;">
+              <span style="font-weight:600; color:#d97706;">QSD</span>
+              {it.condition_note ? ` — ${it.condition_note}` : ' — Hoạt động bình thường'}
+            </td>
+            <td class="text-right">{formatVND(it.purchase_price_cents)}</td>
+            <td class="text-right" style="font-weight:700; color:#dc2626;">
+              {formatVND(it.quantity * it.purchase_price_cents)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+
+    <!-- TỔNG KẾT TIỀN -->
+    <div class="summary-box">
+      <div class="summary-row">
+        <span>Hình thức thanh toán:</span>
+        <span style="font-weight:600;">{buyback.payment_method === 'BANK' ? `Chuyển khoản (${buyback.bank_account || 'Ngân hàng'})` : 'Tiền mặt tại chỗ'}</span>
+      </div>
+      <div class="summary-total">
+        <span>Tổng tiền thanh toán:</span>
+        <span>{formatVND(buyback.total_amount_cents)}</span>
+      </div>
+    </div>
+
+    <!-- CAM KẾT PHÁP LÝ BÀN GIAO MÁY CŨ -->
+    <div class="terms-box">
+      <div class="terms-title">Cam kết &amp; Thỏa thuận bàn giao máy cũ:</div>
+      <ol>
+        <li>Bên B cam đoan toàn bộ máy móc, bo mạch, linh kiện bàn giao trên là tài sản thuộc quyền sở hữu hợp pháp của mình, không có nguồn gốc từ trộm cắp, vi phạm pháp luật hay tranh chấp tài sản.</li>
+        <li>Bên A đã tiến hành kiểm tra tình trạng ngoại quan, linh kiện thực tế và thanh toán đủ số tiền thỏa thuận cho Bên B theo phương thức trên.</li>
+        <li>Hai bên cùng thống nhất số lượng, tình trạng hàng hóa và cam kết không có khiếu nại phát sinh sau khi ký biên bản này.</li>
+      </ol>
+    </div>
+
+    <!-- CHỮ KÝ 2 BÊN -->
+    <div class="signature-grid">
+      <div>
+        <div class="sig-title">Đại diện Bên Bán (Bên B)</div>
+        <div class="sig-sub">(Ký, ghi rõ họ tên &amp; đã nhận đủ tiền)</div>
+        <div class="sig-space"></div>
+        <div class="sig-name">{buyback.customer_name || '...........................................'}</div>
+      </div>
+
+      <div>
+        <div class="sig-title">Đại diện Bên Thu Mua (Bên A)</div>
+        <div class="sig-sub">(Ký, ghi rõ họ tên &amp; đã nhập kho)</div>
+        <div class="sig-space"></div>
+        <div class="sig-name">Trung Kiên Game</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

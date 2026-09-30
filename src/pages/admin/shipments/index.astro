@@ -1,0 +1,436 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+
+export const prerender = false;
+
+const url = new URL(Astro.request.url);
+const q = url.searchParams.get('q')?.trim() || '';
+const partnerId = url.searchParams.get('partner') || '';
+const status = url.searchParams.get('status') || '';
+const reconStatus = url.searchParams.get('recon') || '';
+
+// 1. Lấy danh sách Đối tác Giao hàng để lọc
+const { results: rawPartners } = await env.DB.prepare(`
+  SELECT id, partner_code, name, partner_type FROM delivery_partners ORDER BY name ASC
+`).all<any>();
+const partners = rawPartners ?? [];
+
+// 2. Xây dựng truy vấn danh sách vận đơn
+let sql = `
+  SELECT 
+    s.*,
+    o.order_code,
+    o.order_type,
+    o.order_status,
+    o.paid_amount_cents,
+    o.amount_total_cents,
+    dp.name AS partner_name,
+    dp.partner_type
+  FROM shipments s
+  LEFT JOIN orders o ON s.order_id = o.id
+  LEFT JOIN delivery_partners dp ON s.delivery_partner_id = dp.id
+  WHERE 1=1
+`;
+
+const params: any[] = [];
+
+if (q) {
+  sql += ` AND (s.tracking_code LIKE ? OR s.receiver_name LIKE ? OR s.receiver_phone LIKE ? OR s.bus_station LIKE ? OR s.bus_plate LIKE ? OR o.order_code LIKE ?)`;
+  params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+}
+
+if (partnerId) {
+  sql += ` AND s.delivery_partner_id = ?`;
+  params.push(Number(partnerId));
+}
+
+if (status) {
+  sql += ` AND s.status = ?`;
+  params.push(status);
+}
+
+if (reconStatus) {
+  if (reconStatus === 'UNRECONCILED') {
+    sql += ` AND (s.reconciliation_status IS NULL OR s.reconciliation_status != 'RECONCILED')`;
+  } else if (reconStatus === 'RECONCILED') {
+    sql += ` AND s.reconciliation_status = 'RECONCILED'`;
+  }
+}
+
+sql += ` ORDER BY s.id DESC`;
+
+const { results: rawShipments } = await env.DB.prepare(sql).bind(...params).all<any>();
+const shipments = rawShipments ?? [];
+
+// Thống kê nhanh
+const totalCount = shipments.length;
+const pendingCount = shipments.filter(s => s.status === 'PENDING').length;
+const shippingCount = shipments.filter(s => s.status === 'SHIPPING').length;
+const deliveredCount = shipments.filter(s => s.status === 'DELIVERED').length;
+const totalCod = shipments.reduce((sum, s) => sum + (s.cod_amount_cents || 0), 0);
+
+const formatNum = (val: number) => {
+  if (!val || isNaN(val)) return '0';
+  return new Intl.NumberFormat('en-US').format(val);
+};
+
+const formatDate = (iso: string) => {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  } catch {
+    return iso;
+  }
+};
+---
+
+<AdminLayout title="Quản lý Vận đơn & Giao hàng" active="orders">
+  <div class="flex flex-col lg:flex-row gap-4 items-start relative">
+    
+    <!-- CỘT TRÁI: BỘ LỌC ĐỒNG BỘ CHUẨN KIOTVIET (AUTO SUBMIT) -->
+    <aside class="w-full lg:w-64 xl:w-72 bg-white rounded-xl border border-gray-200 shadow-xs p-4 shrink-0">
+      <div class="flex items-center justify-between pb-3 border-b border-gray-100 mb-4">
+        <h2 class="text-sm font-bold text-gray-900 uppercase tracking-wide flex items-center gap-1.5">
+          <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+          </svg>
+          Bộ lọc vận đơn
+        </h2>
+      </div>
+
+      <form id="shipmentFilterForm" method="GET" action="/admin/shipments" class="space-y-4 text-xs">
+        <div>
+          <label class="block font-bold text-gray-500 uppercase tracking-wider mb-1">Từ khóa</label>
+          <input
+            type="text"
+            name="q"
+            value={q}
+            placeholder="Mã vận đơn, số xe, SĐT, mã đơn..."
+            class="w-full h-8.5 px-2.5 bg-white border border-gray-300 rounded-lg text-[13px] text-gray-800 focus:border-[#00a2ff] focus:outline-none"
+          />
+        </div>
+
+        <div>
+          <label class="block font-bold text-gray-500 uppercase tracking-wider mb-1">Đối tác / Chành xe</label>
+          <select
+            name="partner"
+            class="w-full h-8.5 px-2 bg-white border border-gray-300 rounded-lg text-[13px] text-gray-800 focus:border-[#00a2ff] focus:outline-none"
+          >
+            <option value="">-- Tất cả đơn vị --</option>
+            {partners.map((p: any) => (
+              <option value={p.id} selected={String(p.id) === partnerId}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label class="block font-bold text-gray-500 uppercase tracking-wider mb-1">Trạng thái giao hàng</label>
+          <select
+            name="status"
+            class="w-full h-8.5 px-2 bg-white border border-gray-300 rounded-lg text-[13px] text-gray-800 focus:border-[#00a2ff] focus:outline-none"
+          >
+            <option value="">-- Tất cả trạng thái --</option>
+            <option value="PENDING" selected={status === 'PENDING'}>Chờ gửi hàng / Chờ lấy</option>
+            <option value="SHIPPING" selected={status === 'SHIPPING'}>Đang giao hàng</option>
+            <option value="DELIVERED" selected={status === 'DELIVERED'}>Đã giao thành công</option>
+            <option value="RETURNED" selected={status === 'RETURNED'}>Đã chuyển hoàn</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block font-bold text-gray-500 uppercase tracking-wider mb-1">Trạng thái đối soát</label>
+          <select
+            name="recon"
+            class="w-full h-8.5 px-2 bg-white border border-gray-300 rounded-lg text-[13px] text-gray-800 focus:border-[#00a2ff] focus:outline-none"
+          >
+            <option value="">-- Tất cả --</option>
+            <option value="UNRECONCILED" selected={reconStatus === 'UNRECONCILED'}>Chưa đối soát (Chờ thu COD)</option>
+            <option value="RECONCILED" selected={reconStatus === 'RECONCILED'}>Đã đối soát (Đã vào sổ quỹ)</option>
+          </select>
+        </div>
+
+        <div class="pt-2">
+          <a
+            href="/admin/shipments"
+            class="w-full py-1.5 flex items-center justify-center gap-1 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded text-xs transition"
+          >
+            ↺ Đặt lại bộ lọc
+          </a>
+        </div>
+      </form>
+    </aside>
+
+    <!-- CỘT PHẢI: BẢNG VẬN ĐƠN & GIAO HÀNG -->
+    <main class="flex-1 w-full bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+      
+      <!-- HEADER -->
+      <div class="p-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white">
+        <div>
+          <h1 class="text-lg sm:text-xl font-bold text-gray-900 flex items-center gap-2">
+            <span>Danh sách Vận đơn</span>
+            <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+              {totalCount} vận đơn
+            </span>
+          </h1>
+          <p class="text-xs text-gray-500 mt-0.5">Theo dõi lịch trình gửi chành xe, hãng bưu cục và kiểm soát thu tiền COD.</p>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <a
+            href="/admin/delivery-reconciliations"
+            class="px-3.5 py-1.5 bg-[#0070d2] hover:bg-[#005bb5] active:bg-[#004a94] text-white font-bold rounded-lg text-xs transition shadow flex items-center gap-1.5 cursor-pointer"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            Đối soát cước & COD
+          </a>
+        </div>
+      </div>
+
+      <!-- CARDS THỐNG KÊ NHANH -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 p-4 bg-[#f8fafc] border-b border-gray-100 text-xs">
+        <div class="p-3 bg-white rounded-lg border border-gray-200 shadow-2xs">
+          <span class="text-gray-500 block">Chờ gửi hàng</span>
+          <span class="text-base font-bold text-amber-600 mt-1 block">{pendingCount} kiện</span>
+        </div>
+        <div class="p-3 bg-white rounded-lg border border-gray-200 shadow-2xs">
+          <span class="text-gray-500 block">Đang vận chuyển</span>
+          <span class="text-base font-bold text-blue-600 mt-1 block">{shippingCount} kiện</span>
+        </div>
+        <div class="p-3 bg-white rounded-lg border border-gray-200 shadow-2xs">
+          <span class="text-gray-500 block">Đã giao thành công</span>
+          <span class="text-base font-bold text-emerald-600 mt-1 block">{deliveredCount} kiện</span>
+        </div>
+        <div class="p-3 bg-white rounded-lg border border-gray-200 shadow-2xs">
+          <span class="text-gray-500 block">Tổng COD trên danh sách</span>
+          <span class="text-base font-bold text-[#0070d2] mt-1 block tabular-nums">{formatNum(totalCod)}</span>
+        </div>
+      </div>
+
+      <!-- BẢNG DANH SÁCH VẬN ĐƠN -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs text-gray-700">
+          <thead class="bg-[#f8f9fa] border-b border-gray-200 text-[11.5px] font-bold text-gray-600 uppercase tracking-wider select-none">
+            <tr>
+              <th class="py-3 px-3 w-10 text-center">
+                <input type="checkbox" id="selectAllCheckbox" class="rounded text-blue-600 focus:ring-0 cursor-pointer" />
+              </th>
+              <th class="py-3 px-3 w-32">Mã vận đơn / Xe</th>
+              <th class="py-3 px-3 w-28">Đơn hàng</th>
+              <th class="py-3 px-3">Đối tác / Chành xe</th>
+              <th class="py-3 px-3">Người nhận / Nơi nhận</th>
+              <th class="py-3 px-3 text-right">Tiền COD</th>
+              <th class="py-3 px-3 text-right">Cước vận chuyển</th>
+              <th class="py-3 px-3 text-center w-32">Trạng thái GH</th>
+              <th class="py-3 px-3 text-center w-28">Đối soát</th>
+              <th class="py-3 px-3 text-center w-20">Thao tác</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">
+            {shipments.length > 0 ? (
+              shipments.map((s: any) => (
+                <tr class="hover:bg-blue-50/40 transition">
+                  <td class="py-3 px-3 text-center">
+                    <input type="checkbox" class="shipment-row-checkbox rounded text-blue-600 focus:ring-0 cursor-pointer" value={s.id} />
+                  </td>
+                  <td class="py-3 px-3">
+                    <div class="font-mono font-bold text-gray-900 text-[12px]">
+                      {s.tracking_code || 'Chưa có mã'}
+                    </div>
+                    {s.bus_station && (
+                      <div class="text-[11px] text-gray-500 mt-0.5 truncate max-w-[140px]" title={s.bus_station}>
+                        Trạm: {s.bus_station}
+                      </div>
+                    )}
+                    {s.bus_plate && (
+                      <div class="text-[10.5px] text-gray-400 font-mono">Xe: {s.bus_plate}</div>
+                    )}
+                  </td>
+                  <td class="py-3 px-3">
+                    <a href={`/admin/orders/${s.order_id}`} class="font-bold text-blue-600 hover:underline font-mono">
+                      {s.order_code || `DH#${s.order_id}`}
+                    </a>
+                    <div class="text-[10.5px] text-gray-400">{formatDate(s.created_at)}</div>
+                  </td>
+                  <td class="py-3 px-3">
+                    <div class="font-semibold text-gray-900 flex items-center gap-1">
+                      <span>{s.partner_type === 'BUS' ? '🚌' : s.partner_type === 'INTEGRATED' ? '📦' : '🛵'}</span>
+                      <span>{s.partner_name || s.carrier || 'Chành xe'}</span>
+                    </div>
+                    <div class="text-[10.5px] text-gray-400 font-normal">
+                      {s.weight_grams ? `${s.weight_grams}g` : ''} {s.dimensions ? `(${s.dimensions})` : ''}
+                    </div>
+                  </td>
+                  <td class="py-3 px-3">
+                    <div class="font-medium text-gray-900">{s.receiver_name || 'Khách nhận'}</div>
+                    <div class="text-[11px] text-gray-500 tabular-nums">{s.receiver_phone || '—'}</div>
+                    <div class="text-[11px] text-gray-400 truncate max-w-xs" title={s.receiver_address}>{s.receiver_address || '—'}</div>
+                  </td>
+                  <td class="py-3 px-3 text-right tabular-nums font-bold text-[#0070d2]">
+                    {s.cod_amount_cents > 0 ? formatNum(s.cod_amount_cents) : '0'}
+                  </td>
+                  <td class="py-3 px-3 text-right tabular-nums">
+                    <span class="font-semibold text-gray-800">{formatNum(s.shipping_fee_cents || 0)}</span>
+                    <span class="block text-[10.5px] text-gray-400">
+                      {s.shipping_payer === 'SHOP_PAYS' ? 'Shop trả' : 'Khách trả'}
+                    </span>
+                  </td>
+                  <td class="py-3 px-3 text-center">
+                    <select
+                      class="shipment-status-select h-7 px-2 text-[11px] font-bold rounded border border-gray-300 bg-white focus:outline-none cursor-pointer"
+                      data-id={s.id}
+                    >
+                      <option value="PENDING" selected={s.status === 'PENDING'}>Chờ gửi hàng</option>
+                      <option value="SHIPPING" selected={s.status === 'SHIPPING'}>Đang giao hàng</option>
+                      <option value="DELIVERED" selected={s.status === 'DELIVERED'}>Đã giao</option>
+                      <option value="RETURNED" selected={s.status === 'RETURNED'}>Chuyển hoàn</option>
+                      <option value="CANCELLED" selected={s.status === 'CANCELLED'}>Đã hủy</option>
+                    </select>
+                  </td>
+                  <td class="py-3 px-3 text-center">
+                    {s.reconciliation_status === 'RECONCILED' ? (
+                      <span class="inline-block px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10.5px] font-bold">
+                        Đã đối soát
+                      </span>
+                    ) : (
+                      <span class="inline-block px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10.5px] font-semibold">
+                        Chưa đối soát
+                      </span>
+                    )}
+                  </td>
+                  <td class="py-3 px-3 text-center">
+                    <a
+                      href={`/admin/orders/${s.order_id}/print`}
+                      target="_blank"
+                      class="inline-block px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded text-xs transition font-medium"
+                      title="In phiếu gửi xe"
+                    >
+                      In
+                    </a>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colspan="10" class="py-12 text-center text-gray-400">
+                  Không tìm thấy vận đơn nào phù hợp với bộ lọc.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- BULK ACTION BAR NỔI (KHI CHECKBOX ĐƯỢC CHỌN) -->
+      <div id="bulkActionBar" class="hidden sticky bottom-4 mx-4 my-2 p-3 bg-gray-900 text-white rounded-xl shadow-2xl flex items-center justify-between z-40">
+        <div class="text-xs font-semibold flex items-center gap-2">
+          <span>Đã chọn <strong id="selectedCountText" class="text-blue-400 font-bold text-sm">0</strong> vận đơn</span>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          <button
+            type="button"
+            id="bulkMarkShippingBtn"
+            class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded font-semibold transition"
+          >
+            Đổi sang: Đang giao
+          </button>
+          <button
+            type="button"
+            id="bulkMarkDeliveredBtn"
+            class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded font-bold transition"
+          >
+            Đổi sang: Đã giao thành công
+          </button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script is:inline>
+    document.addEventListener('DOMContentLoaded', () => {
+      // Auto submit filter on change
+      const filterForm = document.getElementById('shipmentFilterForm');
+      filterForm?.querySelectorAll('select').forEach(s => {
+        s.addEventListener('change', () => filterForm.submit());
+      });
+
+      // Quick change status on select
+      document.querySelectorAll('.shipment-status-select').forEach(sel => {
+        sel.addEventListener('change', async (e) => {
+          const id = Number(e.currentTarget.dataset.id);
+          const newStatus = e.currentTarget.value;
+
+          try {
+            const resp = await fetch('/api/admin/shipments', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'update_status', id, status: newStatus })
+            });
+            const res = await resp.json();
+            if (!res.success) {
+              alert(res.error || 'Lỗi cập nhật trạng thái');
+            }
+          } catch (err) {
+            alert('Lỗi kết nối');
+          }
+        });
+      });
+
+      // Bulk checkboxes
+      const selectAll = document.getElementById('selectAllCheckbox');
+      const rowCheckboxes = document.querySelectorAll('.shipment-row-checkbox');
+      const bulkBar = document.getElementById('bulkActionBar');
+      const countText = document.getElementById('selectedCountText');
+
+      const updateBulkBar = () => {
+        const checked = Array.from(rowCheckboxes).filter(c => c.checked);
+        if (checked.length > 0) {
+          bulkBar?.classList.remove('hidden');
+          if (countText) countText.innerText = checked.length;
+        } else {
+          bulkBar?.classList.add('hidden');
+        }
+      };
+
+      selectAll?.addEventListener('change', (e) => {
+        rowCheckboxes.forEach(c => c.checked = e.target.checked);
+        updateBulkBar();
+      });
+
+      rowCheckboxes.forEach(c => {
+        c.addEventListener('change', updateBulkBar);
+      });
+
+      const executeBulkUpdate = async (targetStatus) => {
+        const checkedIds = Array.from(rowCheckboxes).filter(c => c.checked).map(c => Number(c.value));
+        if (checkedIds.length === 0) return;
+
+        if (!confirm(`Bạn có chắc chắn muốn chuyển ${checkedIds.length} vận đơn sang trạng thái này?`)) return;
+
+        try {
+          const resp = await fetch('/api/admin/shipments', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'bulk_update_status', ids: checkedIds, status: targetStatus })
+          });
+          const res = await resp.json();
+          if (res.success) {
+            window.location.reload();
+          } else {
+            alert(res.error || 'Lỗi xử lý hàng loạt');
+          }
+        } catch (err) {
+          alert('Lỗi kết nối mạng');
+        }
+      };
+
+      document.getElementById('bulkMarkShippingBtn')?.addEventListener('click', () => executeBulkUpdate('SHIPPING'));
+      document.getElementById('bulkMarkDeliveredBtn')?.addEventListener('click', () => executeBulkUpdate('DELIVERED'));
+    });
+  </script>
+</AdminLayout>

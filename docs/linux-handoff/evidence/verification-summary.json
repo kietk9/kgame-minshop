@@ -1,0 +1,38 @@
+{
+  "status": "PASS",
+  "date": "2026-09-29",
+  "command": "npm run verify",
+  "exit_code": 0,
+  "unit_tests": 952,
+  "astro": {
+    "files": 496,
+    "errors": 0,
+    "warnings": 0,
+    "hints": 44
+  },
+  "gates": [
+    "unit",
+    "Astro",
+    "theme",
+    "build",
+    "CSS",
+    "D1 integrations",
+    "production HTTP permissions",
+    "Stripe countries",
+    "MCP",
+    "scaffold"
+  ],
+  "disposal_scenarios": [
+    "RD01",
+    "RD02",
+    "RD03",
+    "RD04",
+    "RD05",
+    "RD06",
+    "RD07"
+  ],
+  "migration": "0066 applied locally via Local Explorer; no disposal records created in store DB",
+  "deployed": false,
+  "git_diff_check": "72 lines of pre-existing whitespace findings; repository not claimed clean",
+  "intermediate_fix": "HTTP test fixture required selecting recipient for an anonymous sale; business validation kept unchanged"
+}

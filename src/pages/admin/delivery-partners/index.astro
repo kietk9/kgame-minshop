@@ -1,0 +1,530 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+
+export const prerender = false;
+
+const url = new URL(Astro.request.url);
+const q = url.searchParams.get('q')?.trim() || '';
+const partnerType = url.searchParams.get('type') || '';
+const status = url.searchParams.get('status') || '';
+
+// Xây dựng điều kiện truy vấn
+let sql = `
+  SELECT 
+    dp.*,
+    COALESCE((
+      SELECT COUNT(*) FROM shipments s WHERE s.delivery_partner_id = dp.id
+    ), 0) AS total_shipments,
+    COALESCE((
+      SELECT SUM(s.cod_amount_cents) 
+      FROM shipments s 
+      WHERE s.delivery_partner_id = dp.id 
+        AND s.status = 'DELIVERED' 
+        AND (s.reconciliation_status IS NULL OR s.reconciliation_status != 'RECONCILED')
+    ), 0) AS pending_cod_cents,
+    COALESCE((
+      SELECT SUM(s.shipping_fee_cents) 
+      FROM shipments s 
+      WHERE s.delivery_partner_id = dp.id 
+        AND s.shipping_payer = 'SHOP_PAYS'
+        AND (s.reconciliation_status IS NULL OR s.reconciliation_status != 'RECONCILED')
+    ), 0) AS pending_fee_cents
+  FROM delivery_partners dp
+  WHERE 1=1
+`;
+
+const params: any[] = [];
+
+if (q) {
+  sql += ` AND (dp.name LIKE ? OR dp.partner_code LIKE ? OR dp.phone LIKE ? OR dp.address LIKE ?)`;
+  params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+}
+
+if (partnerType) {
+  sql += ` AND dp.partner_type = ?`;
+  params.push(partnerType);
+}
+
+if (status) {
+  sql += ` AND dp.status = ?`;
+  params.push(status);
+}
+
+sql += ` ORDER BY dp.partner_type DESC, dp.name ASC`;
+
+const { results: rawRows } = await env.DB.prepare(sql).bind(...params).all<any>();
+const partners = rawRows ?? [];
+
+// Thống kê tổng quan
+const totalPartners = partners.length;
+const totalBus = partners.filter(p => p.partner_type === 'BUS').length;
+const totalIntegrated = partners.filter(p => p.partner_type === 'INTEGRATED').length;
+const totalLocal = partners.filter(p => p.partner_type === 'LOCAL').length;
+const totalPendingCod = partners.reduce((s, p) => s + (p.pending_cod_cents || 0), 0);
+const totalPendingFee = partners.reduce((s, p) => s + (p.pending_fee_cents || 0), 0);
+
+const formatNum = (val: number) => {
+  if (!val || isNaN(val)) return '0';
+  return new Intl.NumberFormat('en-US').format(val);
+};
+---
+
+<AdminLayout title="Đối tác giao hàng & Chành xe" active="orders">
+  <div class="flex flex-col lg:flex-row gap-4 items-start relative">
+    
+    <!-- CỘT TRÁI: BỘ LỌC ĐỒNG BỘ CHUẨN KIOTVIET (AUTO SUBMIT) -->
+    <aside class="w-full lg:w-64 xl:w-72 bg-white rounded-xl border border-gray-200 shadow-xs p-4 shrink-0">
+      <div class="flex items-center justify-between pb-3 border-b border-gray-100 mb-4">
+        <h2 class="text-sm font-bold text-gray-900 uppercase tracking-wide flex items-center gap-1.5">
+          <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+          </svg>
+          Bộ lọc tìm kiếm
+        </h2>
+      </div>
+
+      <form id="partnerFilterForm" method="GET" action="/admin/delivery-partners" class="space-y-4 text-xs">
+        <!-- Tìm kiếm -->
+        <div>
+          <label class="block font-bold text-gray-500 uppercase tracking-wider mb-1">Từ khóa</label>
+          <input
+            type="text"
+            name="q"
+            value={q}
+            placeholder="Theo tên, mã, số xe, SĐT..."
+            class="w-full h-8.5 px-2.5 bg-white border border-gray-300 rounded-lg text-[13px] text-gray-800 focus:border-[#00a2ff] focus:outline-none"
+          />
+        </div>
+
+        <!-- Loại hình đối tác -->
+        <div>
+          <label class="block font-bold text-gray-500 uppercase tracking-wider mb-1">Loại đối tác</label>
+          <select
+            name="type"
+            class="w-full h-8.5 px-2 bg-white border border-gray-300 rounded-lg text-[13px] text-gray-800 focus:border-[#00a2ff] focus:outline-none"
+          >
+            <option value="">-- Tất cả loại hình --</option>
+            <option value="BUS" selected={partnerType === 'BUS'}>🚌 Chành xe / Xe khách liên tỉnh</option>
+            <option value="INTEGRATED" selected={partnerType === 'INTEGRATED'}>📦 Hãng vận chuyển (GHN/J&T)</option>
+            <option value="LOCAL" selected={partnerType === 'LOCAL'}>🛵 Shipper riêng của shop</option>
+          </select>
+        </div>
+
+        <!-- Trạng thái -->
+        <div>
+          <label class="block font-bold text-gray-500 uppercase tracking-wider mb-1">Trạng thái hoạt động</label>
+          <select
+            name="status"
+            class="w-full h-8.5 px-2 bg-white border border-gray-300 rounded-lg text-[13px] text-gray-800 focus:border-[#00a2ff] focus:outline-none"
+          >
+            <option value="">-- Tất cả trạng thái --</option>
+            <option value="ACTIVE" selected={status === 'ACTIVE'}>Đang hoạt động</option>
+            <option value="INACTIVE" selected={status === 'INACTIVE'}>Ngừng hoạt động</option>
+          </select>
+        </div>
+
+        <div class="pt-2">
+          <a
+            href="/admin/delivery-partners"
+            class="w-full py-1.5 flex items-center justify-center gap-1 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded text-xs transition"
+          >
+            ↺ Đặt lại bộ lọc
+          </a>
+        </div>
+      </form>
+    </aside>
+
+    <!-- CỘT PHẢI: BẢNG DỮ LIỆU ĐỐI TÁC GIAO HÀNG -->
+    <main class="flex-1 w-full bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+      
+      <!-- HEADER & CÁC NÚT THAO TÁC -->
+      <div class="p-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white">
+        <div>
+          <h1 class="text-lg sm:text-xl font-bold text-gray-900 flex items-center gap-2">
+            <span>Đối tác giao hàng & Chành xe</span>
+            <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+              {totalPartners} đối tác
+            </span>
+          </h1>
+          <p class="text-xs text-gray-500 mt-0.5">Quản lý nhà xe liên tỉnh, hãng chuyển phát và công nợ COD/cước xe.</p>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <a
+            href="/admin/shipments"
+            class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-lg text-xs transition flex items-center gap-1.5"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+            </svg>
+            Quản lý Vận đơn
+          </a>
+
+          <button
+            type="button"
+            id="openAddPartnerModalBtn"
+            class="px-3.5 py-1.5 bg-[#0070d2] hover:bg-[#005bb5] active:bg-[#004a94] text-white font-bold rounded-lg text-xs transition shadow flex items-center gap-1.5 cursor-pointer"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/>
+            </svg>
+            + Thêm đối tác
+          </button>
+        </div>
+      </div>
+
+      <!-- CARDS THỐNG KÊ NHANH CÔNG NỢ VẬN CHUYỂN -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 p-4 bg-[#f8fafc] border-b border-gray-100 text-xs">
+        <div class="p-3 bg-white rounded-lg border border-gray-200 shadow-2xs">
+          <span class="text-gray-500 block">Chành xe / Xe khách</span>
+          <span class="text-base font-bold text-gray-900 mt-1 block">{totalBus} nhà xe</span>
+        </div>
+        <div class="p-3 bg-white rounded-lg border border-gray-200 shadow-2xs">
+          <span class="text-gray-500 block">Hãng chuyển phát & Shipper</span>
+          <span class="text-base font-bold text-gray-900 mt-1 block">{totalIntegrated + totalLocal} đơn vị</span>
+        </div>
+        <div class="p-3 bg-white rounded-lg border border-gray-200 shadow-2xs">
+          <span class="text-gray-500 block">Tiền COD ĐTGH đang giữ</span>
+          <span class="text-base font-bold text-[#0070d2] mt-1 block tabular-nums">{formatNum(totalPendingCod)}</span>
+        </div>
+        <div class="p-3 bg-white rounded-lg border border-gray-200 shadow-2xs">
+          <span class="text-gray-500 block">Cước vận chuyển shop nợ</span>
+          <span class="text-base font-bold text-amber-600 mt-1 block tabular-nums">{formatNum(totalPendingFee)}</span>
+        </div>
+      </div>
+
+      <!-- BẢNG DANH SÁCH ĐỐI TÁC GIAO HÀNG -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs text-gray-700">
+          <thead class="bg-[#f8f9fa] border-b border-gray-200 text-[11.5px] font-bold text-gray-600 uppercase tracking-wider select-none">
+            <tr>
+              <th class="py-3 px-3 w-28">Mã đối tác</th>
+              <th class="py-3 px-3">Tên đơn vị / Chành xe</th>
+              <th class="py-3 px-3 w-28">Loại hình</th>
+              <th class="py-3 px-3 w-28">Điện thoại</th>
+              <th class="py-3 px-3">Địa chỉ / Bến bãi đón</th>
+              <th class="py-3 px-3 text-right">COD chưa đối soát</th>
+              <th class="py-3 px-3 text-right">Cước shop nợ</th>
+              <th class="py-3 px-3 text-center w-28">Trạng thái</th>
+              <th class="py-3 px-3 text-center w-24">Thao tác</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">
+            {partners.length > 0 ? (
+              partners.map((p: any) => (
+                <tr class="hover:bg-blue-50/40 transition">
+                  <td class="py-3 px-3 font-mono font-bold text-gray-900">
+                    {p.partner_code}
+                  </td>
+                  <td class="py-3 px-3 font-semibold text-gray-900">
+                    <div class="flex items-center gap-1.5">
+                      <span>{p.partner_type === 'BUS' ? '🚌' : p.partner_type === 'INTEGRATED' ? '📦' : '🛵'}</span>
+                      <span>{p.name}</span>
+                    </div>
+                    {p.note && (
+                      <div class="text-[11px] text-gray-400 font-normal mt-0.5 truncate max-w-xs">{p.note}</div>
+                    )}
+                  </td>
+                  <td class="py-3 px-3">
+                    <span class={`px-2 py-0.5 rounded font-bold text-[11px] ${
+                      p.partner_type === 'BUS' ? 'bg-amber-100 text-amber-800' :
+                      p.partner_type === 'INTEGRATED' ? 'bg-blue-100 text-blue-800' :
+                      'bg-emerald-100 text-emerald-800'
+                    }`}>
+                      {p.partner_type === 'BUS' ? 'Chành xe' : p.partner_type === 'INTEGRATED' ? 'Hãng GH' : 'Shipper'}
+                    </span>
+                  </td>
+                  <td class="py-3 px-3 tabular-nums font-medium text-gray-800">
+                    {p.phone || '—'}
+                  </td>
+                  <td class="py-3 px-3 text-gray-600 truncate max-w-xs" title={p.address}>
+                    {p.address || '—'}
+                  </td>
+                  <td class="py-3 px-3 text-right tabular-nums font-bold text-[#0070d2]">
+                    {p.pending_cod_cents > 0 ? formatNum(p.pending_cod_cents) : '0'}
+                  </td>
+                  <td class="py-3 px-3 text-right tabular-nums font-bold text-amber-600">
+                    {p.pending_fee_cents > 0 ? formatNum(p.pending_fee_cents) : '0'}
+                  </td>
+                  <td class="py-3 px-3 text-center">
+                    <span class={`inline-block px-2 py-0.5 rounded-full text-[10.5px] font-bold ${
+                      p.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-200 text-gray-600'
+                    }`}>
+                      {p.status === 'ACTIVE' ? 'Hoạt động' : 'Đã ngưng'}
+                    </span>
+                  </td>
+                  <td class="py-3 px-3 text-center">
+                    <div class="flex items-center justify-center gap-1.5">
+                      <button
+                        type="button"
+                        class="btn-edit-partner p-1 text-gray-500 hover:text-blue-600 transition"
+                        title="Chỉnh sửa đối tác"
+                        data-id={p.id}
+                        data-code={p.partner_code}
+                        data-name={p.name}
+                        data-type={p.partner_type}
+                        data-phone={p.phone || ''}
+                        data-address={p.address || ''}
+                        data-contact={p.contact_person || ''}
+                        data-note={p.note || ''}
+                      >
+                        ✏️
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-toggle-partner p-1 text-gray-500 hover:text-red-600 transition"
+                        title={p.status === 'ACTIVE' ? 'Tạm ngưng hoạt động' : 'Kích hoạt lại'}
+                        data-id={p.id}
+                        data-status={p.status}
+                      >
+                        {p.status === 'ACTIVE' ? '⏸️' : '▶️'}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colspan="9" class="py-12 text-center text-gray-400">
+                  Chưa có đối tác giao hàng nào phù hợp với điều kiện tìm kiếm.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <!-- MODAL THÊM MỚI / CHỈNH SỬA ĐỐI TÁC GIAO HÀNG -->
+  <div id="partnerModal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-xl shadow-2xl border border-gray-200 w-full max-w-lg overflow-hidden">
+      <div class="p-4 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+        <h3 id="modalTitle" class="text-sm font-bold text-gray-900">Thêm đối tác giao hàng mới</h3>
+        <button type="button" id="closePartnerModalBtn" class="text-gray-400 hover:text-gray-600 font-bold text-sm">✕</button>
+      </div>
+
+      <form id="partnerForm" class="p-4 space-y-3 text-xs">
+        <input type="hidden" id="partnerIdInput" name="id" value="" />
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-gray-600 font-medium mb-1">Mã đối tác (Tự sinh nếu trống)</label>
+            <input
+              type="text"
+              id="partnerCodeInput"
+              placeholder="VD: DTGH001"
+              class="w-full h-8 px-2.5 border border-gray-300 rounded font-mono uppercase focus:border-[#00a2ff] focus:outline-none"
+            />
+          </div>
+          <div>
+            <label class="block text-gray-600 font-medium mb-1">Loại hình <span class="text-red-500">*</span></label>
+            <select
+              id="partnerTypeInput"
+              class="w-full h-8 px-2 border border-gray-300 rounded font-medium focus:border-[#00a2ff] focus:outline-none"
+            >
+              <option value="BUS">🚌 Chành xe / Xe khách liên tỉnh</option>
+              <option value="INTEGRATED">📦 Hãng chuyển phát (GHN / J&T)</option>
+              <option value="LOCAL">🛵 Shipper riêng của shop</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-gray-600 font-medium mb-1">Tên đối tác / Nhà xe <span class="text-red-500">*</span></label>
+          <input
+            type="text"
+            id="partnerNameInput"
+            required
+            placeholder="VD: Chành xe Tô Châu (Tuyến Miền Tây)"
+            class="w-full h-8 px-2.5 border border-gray-300 rounded focus:border-[#00a2ff] focus:outline-none font-semibold text-gray-900"
+          />
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-gray-600 font-medium mb-1">Số điện thoại nhà xe / bưu tá</label>
+            <input
+              type="text"
+              id="partnerPhoneInput"
+              placeholder="0899..."
+              class="w-full h-8 px-2.5 border border-gray-300 rounded focus:border-[#00a2ff] focus:outline-none tabular-nums"
+            />
+          </div>
+          <div>
+            <label class="block text-gray-600 font-medium mb-1">Người liên hệ / Tài xế</label>
+            <input
+              type="text"
+              id="partnerContactInput"
+              placeholder="VD: Anh Ba điều xe"
+              class="w-full h-8 px-2.5 border border-gray-300 rounded focus:border-[#00a2ff] focus:outline-none"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-gray-600 font-medium mb-1">Địa chỉ bến bãi đón / Kho gửi</label>
+          <input
+            type="text"
+            id="partnerAddressInput"
+            placeholder="VD: Bãi xe Miền Tây, 395 Kinh Dương Vương, Bình Tân"
+            class="w-full h-8 px-2.5 border border-gray-300 rounded focus:border-[#00a2ff] focus:outline-none"
+          />
+        </div>
+
+        <div>
+          <label class="block text-gray-600 font-medium mb-1">Ghi chú tuyến xe / Lộ trình</label>
+          <textarea
+            id="partnerNoteInput"
+            rows="2"
+            placeholder="Tuyến chạy: Cần Thơ, Bến Tre, Tiền Giang. Nhận hàng trước 17h hàng ngày..."
+            class="w-full p-2 border border-gray-300 rounded focus:border-[#00a2ff] focus:outline-none"
+          ></textarea>
+        </div>
+
+        <div class="pt-3 border-t border-gray-100 flex items-center justify-end gap-2">
+          <button type="button" id="cancelPartnerModalBtn" class="px-3.5 py-1.5 rounded bg-gray-200 hover:bg-gray-300 font-medium text-gray-700">
+            Hủy
+          </button>
+          <button type="submit" id="savePartnerSubmitBtn" class="px-4 py-1.5 rounded bg-[#0070d2] hover:bg-[#005bb5] font-bold text-white shadow">
+            Lưu đối tác
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script is:inline>
+    document.addEventListener('DOMContentLoaded', () => {
+      // Auto submit filter on change
+      const filterForm = document.getElementById('partnerFilterForm');
+      filterForm?.querySelectorAll('select').forEach(s => {
+        s.addEventListener('change', () => filterForm.submit());
+      });
+
+      // Modal management
+      const modal = document.getElementById('partnerModal');
+      const modalTitle = document.getElementById('modalTitle');
+      const partnerForm = document.getElementById('partnerForm');
+      const openBtn = document.getElementById('openAddPartnerModalBtn');
+      const closeBtn = document.getElementById('closePartnerModalBtn');
+      const cancelBtn = document.getElementById('cancelPartnerModalBtn');
+
+      const openModal = (isEdit = false, data = null) => {
+        if (!modal) return;
+        modal.classList.remove('hidden');
+
+        if (isEdit && data) {
+          modalTitle.innerText = 'Chỉnh sửa đối tác giao hàng';
+          document.getElementById('partnerIdInput').value = data.id;
+          document.getElementById('partnerCodeInput').value = data.code;
+          document.getElementById('partnerCodeInput').disabled = true;
+          document.getElementById('partnerNameInput').value = data.name;
+          document.getElementById('partnerTypeInput').value = data.type;
+          document.getElementById('partnerPhoneInput').value = data.phone;
+          document.getElementById('partnerContactInput').value = data.contact;
+          document.getElementById('partnerAddressInput').value = data.address;
+          document.getElementById('partnerNoteInput').value = data.note;
+        } else {
+          modalTitle.innerText = 'Thêm đối tác giao hàng mới';
+          partnerForm.reset();
+          document.getElementById('partnerIdInput').value = '';
+          document.getElementById('partnerCodeInput').disabled = false;
+        }
+      };
+
+      const closeModal = () => {
+        modal?.classList.add('hidden');
+      };
+
+      openBtn?.addEventListener('click', () => openModal(false));
+      closeBtn?.addEventListener('click', closeModal);
+      cancelBtn?.addEventListener('click', closeModal);
+
+      // Edit buttons
+      document.querySelectorAll('.btn-edit-partner').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const ds = e.currentTarget.dataset;
+          openModal(true, {
+            id: ds.id,
+            code: ds.code,
+            name: ds.name,
+            type: ds.type,
+            phone: ds.phone,
+            address: ds.address,
+            contact: ds.contact,
+            note: ds.note
+          });
+        });
+      });
+
+      // Toggle status button
+      document.querySelectorAll('.btn-toggle-partner').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const id = e.currentTarget.dataset.id;
+          if (!confirm('Bạn có chắc chắn muốn thay đổi trạng thái đối tác giao hàng này?')) return;
+
+          try {
+            const resp = await fetch('/api/admin/delivery-partners', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'toggle_status', id: Number(id) })
+            });
+            const res = await resp.json();
+            if (res.success) {
+              window.location.reload();
+            } else {
+              alert(res.error || 'Lỗi cập nhật');
+            }
+          } catch (err) {
+            alert('Lỗi kết nối mạng');
+          }
+        });
+      });
+
+      // Submit Form
+      partnerForm?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const id = document.getElementById('partnerIdInput').value;
+        const action = id ? 'update' : 'create';
+
+        const payload = {
+          action,
+          id: id ? Number(id) : undefined,
+          partner_code: document.getElementById('partnerCodeInput').value.trim(),
+          name: document.getElementById('partnerNameInput').value.trim(),
+          partner_type: document.getElementById('partnerTypeInput').value,
+          phone: document.getElementById('partnerPhoneInput').value.trim(),
+          contact_person: document.getElementById('partnerContactInput').value.trim(),
+          address: document.getElementById('partnerAddressInput').value.trim(),
+          note: document.getElementById('partnerNoteInput').value.trim()
+        };
+
+        const submitBtn = document.getElementById('savePartnerSubmitBtn');
+        submitBtn.disabled = true;
+        submitBtn.innerText = 'Đang lưu...';
+
+        try {
+          const resp = await fetch('/api/admin/delivery-partners', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const res = await resp.json();
+          if (res.success) {
+            window.location.reload();
+          } else {
+            alert(res.error || 'Lỗi khi lưu đối tác');
+            submitBtn.disabled = false;
+            submitBtn.innerText = 'Lưu đối tác';
+          }
+        } catch (err) {
+          alert('Lỗi kết nối');
+          submitBtn.disabled = false;
+          submitBtn.innerText = 'Lưu đối tác';
+        }
+      });
+    });
+  </script>
+</AdminLayout>

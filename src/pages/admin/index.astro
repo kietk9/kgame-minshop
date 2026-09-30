@@ -1,0 +1,545 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../layouts/AdminLayout.astro';
+
+export const prerender = false;
+
+// 1. DỮ LIỆU KẾT QUẢ BÁN HÀNG HÔM NAY
+const todayRes = await env.DB
+  .prepare(`
+    SELECT 
+      COALESCE(SUM(amount_total_cents), 0) AS revenue,
+      COUNT(*) AS order_count
+    FROM orders
+    WHERE (order_status != 'CANCELLED' OR order_status IS NULL)
+      AND DATE(created_at) = DATE('now')
+  `)
+  .first<{ revenue: number; order_count: number }>();
+
+const todayRevenue = todayRes?.revenue ?? 0;
+const todayOrders = todayRes?.order_count ?? 0;
+
+// 2. DỮ LIỆU TỔN QUỸ THỰC TẾ (SỔ QUỸ CASH TRANSACTIONS)
+const cashRes = await env.DB
+  .prepare(`
+    SELECT 
+      COALESCE(SUM(CASE WHEN flow_type = 'IN' THEN amount_cents ELSE 0 END), 0) AS total_in,
+      COALESCE(SUM(CASE WHEN flow_type = 'OUT' THEN amount_cents ELSE 0 END), 0) AS total_out
+    FROM cash_transactions
+    WHERE status = 'ACTIVE' OR status IS NULL
+  `)
+  .first<{ total_in: number; total_out: number }>();
+
+const totalCashIn = cashRes?.total_in ?? 0;
+const totalCashOut = cashRes?.total_out ?? 0;
+const cashBalance = totalCashIn - totalCashOut;
+
+// 3. DOANH THU THÁNG & TĂNG TRƯỞNG
+const monthRes = await env.DB
+  .prepare(`
+    SELECT 
+      (SELECT COALESCE(SUM(amount_total_cents), 0) FROM orders WHERE (order_status != 'CANCELLED' OR order_status IS NULL) AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')) AS month_revenue,
+      (SELECT COALESCE(SUM(amount_total_cents), 0) FROM orders WHERE (order_status != 'CANCELLED' OR order_status IS NULL) AND strftime('%Y-%m', created_at) = strftime('%Y-%m', date('now', '-1 month'))) AS prev_month_revenue
+  `)
+  .first<{ month_revenue: number; prev_month_revenue: number }>();
+
+const monthRevenue = monthRes?.month_revenue ?? 0;
+const prevMonthRevenue = monthRes?.prev_month_revenue ?? 0;
+const growthPct = prevMonthRevenue > 0 
+  ? (((monthRevenue - prevMonthRevenue) / prevMonthRevenue) * 100).toFixed(1)
+  : '0.0';
+
+// 4. BIỂU ĐỒ DOANH THU THEO TỪNG NGÀY TRONG THÁNG
+const { results: rawDailyData } = await env.DB
+  .prepare(`
+    SELECT 
+      strftime('%d', created_at) AS day,
+      COALESCE(SUM(amount_total_cents), 0) AS revenue,
+      COUNT(*) AS count
+    FROM orders
+    WHERE (order_status != 'CANCELLED' OR order_status IS NULL)
+      AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
+    GROUP BY strftime('%d', created_at)
+    ORDER BY day ASC
+  `)
+  .all<{ day: string; revenue: number; count: number }>();
+
+const dailyMap = new Map((rawDailyData || []).map(r => [parseInt(r.day, 10), r.revenue]));
+const now = new Date();
+const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+const chartDays: Array<{ day: number; label: string; revenue: number }> = [];
+
+let maxDailyRevenue = 10000000;
+for (let d = 1; d <= daysInMonth; d++) {
+  const rev = dailyMap.get(d) || 0;
+  if (rev > maxDailyRevenue) maxDailyRevenue = rev;
+  chartDays.push({
+    day: d,
+    label: String(d).padStart(2, '0'),
+    revenue: rev
+  });
+}
+
+// 5. CẢNH BÁO NGHIỆP VỤ CẤP BÁCH
+const opsAlerts = await env.DB
+  .prepare(`
+    SELECT 
+      (SELECT COUNT(DISTINCT customer_id) FROM orders WHERE (order_status != 'CANCELLED' OR order_status IS NULL) AND cod_amount_cents > 0 AND customer_id IS NOT NULL) AS debtor_cust_count,
+      (SELECT COALESCE(SUM(cod_amount_cents), 0) FROM orders WHERE (order_status != 'CANCELLED' OR order_status IS NULL) AND cod_amount_cents > 0) AS debtor_cust_amount,
+      (SELECT COUNT(DISTINCT supplier_id) FROM purchase_receipts WHERE (receipt_status != 'CANCELLED' OR receipt_status IS NULL) AND debt_amount_cents > 0 AND supplier_id IS NOT NULL) AS debt_supp_count,
+      (SELECT COALESCE(SUM(debt_amount_cents), 0) FROM purchase_receipts WHERE (receipt_status != 'CANCELLED' OR receipt_status IS NULL) AND debt_amount_cents > 0) AS debt_supp_amount,
+      (SELECT COUNT(*) FROM orders WHERE order_type = 'PREORDER' AND order_status IN ('PENDING', 'PROCESSING')) AS preorder_pending_count,
+      (SELECT COUNT(*) FROM repair_tickets WHERE status NOT IN ('COMPLETED', 'CANCELLED', 'DELIVERED', 'RETURNED')) AS repair_pending_count,
+      (SELECT COUNT(*) FROM products WHERE (stock_new + stock_used) <= 2) AS low_stock_count
+  `)
+  .first<{
+    debtor_cust_count: number;
+    debtor_cust_amount: number;
+    debt_supp_count: number;
+    debt_supp_amount: number;
+    preorder_pending_count: number;
+    repair_pending_count: number;
+    low_stock_count: number;
+  }>();
+
+const debtorCustCount = opsAlerts?.debtor_cust_count ?? 0;
+const debtorCustAmount = opsAlerts?.debtor_cust_amount ?? 0;
+const debtSuppCount = opsAlerts?.debt_supp_count ?? 0;
+const debtSuppAmount = opsAlerts?.debt_supp_amount ?? 0;
+const preorderPending = opsAlerts?.preorder_pending_count ?? 0;
+const repairPending = opsAlerts?.repair_pending_count ?? 0;
+const lowStockCount = opsAlerts?.low_stock_count ?? 0;
+
+// 6. TOP 10 HÀNG BÁN CHẠY
+const { results: rawTopProducts } = await env.DB
+  .prepare(`
+    SELECT 
+      product_name_snapshot AS name,
+      COALESCE(SUM(line_total_cents), 0) AS revenue,
+      COALESCE(SUM(quantity), 0) AS total_qty
+    FROM order_lines ol
+    JOIN orders o ON ol.order_id = o.id
+    WHERE (o.order_status != 'CANCELLED' OR o.order_status IS NULL)
+    GROUP BY product_name_snapshot
+    ORDER BY revenue DESC
+    LIMIT 10
+  `)
+  .all<{ name: string; revenue: number; total_qty: number }>();
+
+const topProducts = rawTopProducts || [];
+const maxProdRev = Math.max(1, ...topProducts.map(p => p.revenue));
+
+// 7. TOP 10 KHÁCH MUA NHIỀU NHẤT
+const { results: rawTopCustomers } = await env.DB
+  .prepare(`
+    SELECT 
+      p.name AS name,
+      COALESCE(SUM(o.amount_total_cents), 0) AS total_spent,
+      COUNT(o.id) AS order_count
+    FROM orders o
+    JOIN partners p ON o.customer_id = p.id
+    WHERE (o.order_status != 'CANCELLED' OR o.order_status IS NULL)
+    GROUP BY p.id
+    ORDER BY total_spent DESC
+    LIMIT 10
+  `)
+  .all<{ name: string; total_spent: number; order_count: number }>();
+
+const topCustomers = rawTopCustomers || [];
+const maxCustSpent = Math.max(1, ...topCustomers.map(c => c.total_spent));
+
+// 8. DÒNG SỰ KIỆN GẦN ĐÂY (AUDIT ACTIVITY FEED)
+const { results: rawActivities } = await env.DB
+  .prepare(`
+    SELECT 
+      'ORDER' AS event_type,
+      o.order_code AS code,
+      COALESCE(o.created_by, 'Bán hàng') AS actor,
+      CASE WHEN o.order_type = 'PREORDER' THEN 'nhận cọc đơn đặt hàng' ELSE 'bán đơn hàng' END AS action_text,
+      o.amount_total_cents AS amount_cents,
+      o.created_at
+    FROM orders o
+    WHERE o.order_status != 'CANCELLED'
+    UNION ALL
+    SELECT 
+      'PURCHASE' AS event_type,
+      pr.receipt_code AS code,
+      COALESCE(pr.created_by, 'Kho') AS actor,
+      'nhập hàng từ NCC' AS action_text,
+      pr.total_amount_cents AS amount_cents,
+      pr.created_at
+    FROM purchase_receipts pr
+    WHERE pr.receipt_status != 'CANCELLED'
+    UNION ALL
+    SELECT 
+      'REPAIR' AS event_type,
+      rt.ticket_code AS code,
+      'Kỹ thuật' AS actor,
+      'tiếp nhận sửa chữa' AS action_text,
+      rt.repair_price_cents AS amount_cents,
+      rt.created_at
+    FROM repair_tickets rt
+    WHERE rt.status != 'CANCELLED'
+    ORDER BY created_at DESC
+    LIMIT 10
+  `)
+  .all<{ event_type: string; code: string; actor: string; action_text: string; amount_cents: number; created_at: string }>();
+
+const activities = rawActivities || [];
+
+// HELPER FORMATTERS
+const formatNumber = (num: number) => {
+  if (!num || isNaN(num)) return '0';
+  return new Intl.NumberFormat('vi-VN').format(num);
+};
+
+const formatShort = (amount: number) => {
+  if (!amount || isNaN(amount)) return '0';
+  if (amount >= 1_000_000_000) {
+    return (amount / 1_000_000_000).toFixed(1).replace('.0', '') + ' tỷ';
+  }
+  if (amount >= 1_000_000) {
+    return (amount / 1_000_000).toFixed(1).replace('.0', '') + ' tr';
+  }
+  if (amount >= 1_000) {
+    return (amount / 1_000).toFixed(0) + ' k';
+  }
+  return formatNumber(amount);
+};
+
+const timeAgo = (dateStr: string) => {
+  if (!dateStr) return 'Gần đây';
+  try {
+    const nowMs = Date.now();
+    const thenMs = new Date(dateStr).getTime();
+    const diffMs = nowMs - thenMs;
+    const diffSec = Math.floor(diffMs / 1000);
+    const diffMin = Math.floor(diffSec / 60);
+    const diffHour = Math.floor(diffMin / 60);
+    const diffDay = Math.floor(diffHour / 24);
+
+    if (diffMin < 1) return 'Vừa xong';
+    if (diffMin < 60) return `${diffMin} phút trước`;
+    if (diffHour < 24) return `${diffHour} giờ trước`;
+    if (diffDay < 30) return `${diffDay} ngày trước`;
+    return new Date(dateStr).toLocaleDateString('vi-VN');
+  } catch {
+    return dateStr;
+  }
+};
+---
+
+<AdminLayout title="Tổng quan" active="dashboard">
+  <div class="space-y-4">
+
+    <!-- 1. THANH CHỈ SỐ NHANH ĐẦU NGÀY (KPIs & HEALTH CHECK) -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <!-- DOANH THU HÔM NAY -->
+      <div class="bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-2xs">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-gray-500">Doanh thu hôm nay</span>
+          <span class="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center text-xs font-bold">$</span>
+        </div>
+        <div class="mt-2 flex items-baseline justify-between">
+          <strong class="text-lg font-bold text-gray-900 tabular-nums">{formatNumber(todayRevenue)} đ</strong>
+          <span class="text-[11px] text-gray-400 font-medium">{todayOrders} đơn</span>
+        </div>
+      </div>
+
+      <!-- SỐ DƯ TỒN QUỸ -->
+      <div class="bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-2xs">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-gray-500">Tồn quỹ hiện tại</span>
+          <span class="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center text-xs font-bold">₫</span>
+        </div>
+        <div class="mt-2 flex items-baseline justify-between">
+          <strong class={`text-lg font-bold tabular-nums ${cashBalance >= 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
+            {formatNumber(cashBalance)} đ
+          </strong>
+          <a href="/admin/cash" class="text-[11px] text-blue-600 hover:underline">Sổ quỹ ›</a>
+        </div>
+      </div>
+
+      <!-- ĐƠN ĐẶT CỌC CHỜ HÀNG VỀ -->
+      <div class="bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-2xs">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-gray-500">Đặt cọc chờ giao</span>
+          <span class="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center text-xs">⏳</span>
+        </div>
+        <div class="mt-2 flex items-baseline justify-between">
+          <strong class="text-lg font-bold text-gray-900 tabular-nums">{preorderPending}</strong>
+          <a href="/admin/orders" class="text-[11px] text-indigo-600 hover:underline">Đơn đặt hàng ›</a>
+        </div>
+      </div>
+
+      <!-- MÁY ĐANG SỬA CHỮA -->
+      <div class="bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-2xs">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-gray-500">Máy đang sửa chữa</span>
+          <span class="w-7 h-7 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center text-xs">🔧</span>
+        </div>
+        <div class="mt-2 flex items-baseline justify-between">
+          <strong class="text-lg font-bold text-gray-900 tabular-nums">{repairPending}</strong>
+          <a href="/admin/repairs" class="text-[11px] text-purple-600 hover:underline">Phiếu sửa ›</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. LAYOUT CHÍNH: CỘT BIỂU ĐỒ TRÁI & CỘT CẢNH BÁO / HÀNH ĐỘNG PHẢI -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+      
+      <!-- CỘT TRÁI (8/12): BIỂU ĐỒ DOANH THU & TOP HÀNG/KHÁCH -->
+      <div class="lg:col-span-8 space-y-4">
+        
+        <!-- KHỐI BIỂU ĐỒ DOANH THU THEO NGÀY (STYLE CỘT KIOTVIET) -->
+        <div class="bg-white rounded-xl border border-gray-200/80 p-4 shadow-2xs space-y-3">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-gray-100 pb-3">
+            <div>
+              <span class="text-xs text-gray-400 font-medium">Doanh thu thuần tháng này</span>
+              <div class="flex items-baseline gap-2 mt-0.5">
+                <strong class="text-xl font-extrabold text-[#0070e0] tabular-nums">{formatNumber(monthRevenue)} đ</strong>
+                {growthPct !== '0.0' && (
+                  <span class={`text-xs font-semibold px-1.5 py-0.5 rounded ${growthPct.startsWith('-') ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                    {growthPct.startsWith('-') ? '↓' : '↑'} {growthPct}%
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-gray-500 font-medium">Tháng {now.getMonth() + 1}/{now.getFullYear()}</span>
+            </div>
+          </div>
+
+          <!-- CHART KHUNG CỘT SVG -->
+          <div class="relative h-64 w-full pt-4 select-none">
+            <!-- DÒNG KẺ NGANG TRỤC Y -->
+            <div class="absolute inset-0 flex flex-col justify-between pointer-events-none text-[10px] text-gray-400 pb-6 pr-2">
+              <div class="border-b border-gray-100 flex items-center justify-between w-full h-0"><span>{formatShort(maxDailyRevenue)}</span></div>
+              <div class="border-b border-gray-100 flex items-center justify-between w-full h-0"><span>{formatShort(maxDailyRevenue * 0.75)}</span></div>
+              <div class="border-b border-gray-100 flex items-center justify-between w-full h-0"><span>{formatShort(maxDailyRevenue * 0.5)}</span></div>
+              <div class="border-b border-gray-100 flex items-center justify-between w-full h-0"><span>{formatShort(maxDailyRevenue * 0.25)}</span></div>
+              <div class="border-b border-gray-100 flex items-center justify-between w-full h-0"><span>0</span></div>
+            </div>
+
+            <!-- CÁC CỘT DOANH THU THEO NGÀY -->
+            <div class="absolute inset-x-8 bottom-6 top-0 flex items-end justify-between gap-1">
+              {chartDays.map((item) => {
+                const heightPercent = maxDailyRevenue > 0 ? Math.min(100, Math.round((item.revenue / maxDailyRevenue) * 92)) : 0;
+                const hasRevenue = item.revenue > 0;
+                return (
+                  <div class="group relative flex-1 h-full flex flex-col justify-end items-center cursor-pointer">
+                    <!-- Tooltip hover -->
+                    <div class="absolute bottom-full mb-2 hidden group-hover:flex flex-col items-center z-30 pointer-events-none">
+                      <div class="bg-gray-900 text-white text-[11px] rounded-lg px-2.5 py-1.5 shadow-xl whitespace-nowrap space-y-0.5">
+                        <div class="font-bold text-blue-300">Ngày {item.label}/{now.getMonth() + 1}</div>
+                        <div class="tabular-nums font-semibold">{formatNumber(item.revenue)} đ</div>
+                      </div>
+                      <div class="w-2 h-2 bg-gray-900 rotate-45 -mt-1"></div>
+                    </div>
+
+                    <!-- Thanh Cột Màu Xanh KiotViet -->
+                    <div 
+                      style={`height: ${hasRevenue ? Math.max(6, heightPercent) : 0}%`}
+                      class={`w-full max-w-[20px] rounded-t-xs transition-all duration-300 ${
+                        hasRevenue ? 'bg-[#0070e0] hover:bg-blue-700 shadow-2xs' : 'bg-transparent'
+                      }`}
+                    ></div>
+                    
+                    <!-- Số Ngày Trục X -->
+                    <span class={`text-[9.5px] tabular-nums mt-2 block ${hasRevenue ? 'font-bold text-gray-900' : 'text-gray-400'}`}>
+                      {item.day % 3 === 1 || item.revenue > 0 ? item.label : ''}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. HAI BẢNG DƯỚI: TOP HÀNG BÁN CHẠY & TOP KHÁCH HÀNG -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          
+          <!-- TOP 10 HÀNG BÁN CHẠY -->
+          <div class="bg-white rounded-xl border border-gray-200/80 p-4 shadow-2xs space-y-3">
+            <div class="flex items-center justify-between border-b border-gray-100 pb-2.5">
+              <h3 class="text-xs font-bold text-gray-800 uppercase tracking-wider">Top hàng bán chạy</h3>
+              <span class="text-[11px] text-gray-400">Doanh thu thuần</span>
+            </div>
+
+            <div class="space-y-3 pt-1">
+              {topProducts.length === 0 ? (
+                <p class="text-xs text-gray-400 text-center py-8">Chưa có dữ liệu bán hàng trong kỳ.</p>
+              ) : (
+                topProducts.map((p) => {
+                  const widthPct = Math.min(100, Math.max(6, Math.round((p.revenue / maxProdRev) * 100)));
+                  return (
+                    <div class="space-y-1">
+                      <div class="text-xs font-medium text-gray-800 truncate" title={p.name}>
+                        {p.name}
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <div class="flex-1 bg-gray-50 h-4.5 rounded overflow-hidden">
+                          <div 
+                            style={`width: ${widthPct}%`}
+                            class="bg-[#0070e0] h-full rounded transition-all hover:bg-blue-700"
+                          ></div>
+                        </div>
+                        <span class="text-[11px] font-semibold text-gray-700 tabular-nums w-14 text-right shrink-0">
+                          {formatShort(p.revenue)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          <!-- TOP 10 KHÁCH MUA NHIỀU NHẤT -->
+          <div class="bg-white rounded-xl border border-gray-200/80 p-4 shadow-2xs space-y-3">
+            <div class="flex items-center justify-between border-b border-gray-100 pb-2.5">
+              <h3 class="text-xs font-bold text-gray-800 uppercase tracking-wider">Top khách mua nhiều</h3>
+              <span class="text-[11px] text-gray-400">Tổng chi tiêu</span>
+            </div>
+
+            <div class="space-y-3 pt-1">
+              {topCustomers.length === 0 ? (
+                <p class="text-xs text-gray-400 text-center py-8">Chưa có khách mua hàng trong kỳ.</p>
+              ) : (
+                topCustomers.map((c) => {
+                  const widthPct = Math.min(100, Math.max(6, Math.round((c.total_spent / maxCustSpent) * 100)));
+                  return (
+                    <div class="space-y-1">
+                      <div class="text-xs font-medium text-gray-800 truncate" title={c.name}>
+                        {c.name}
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <div class="flex-1 bg-gray-50 h-4.5 rounded overflow-hidden">
+                          <div 
+                            style={`width: ${widthPct}%`}
+                            class="bg-[#0070e0] h-full rounded transition-all hover:bg-blue-700"
+                          ></div>
+                        </div>
+                        <span class="text-[11px] font-semibold text-gray-700 tabular-nums w-14 text-right shrink-0">
+                          {formatShort(c.total_spent)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+      <!-- CỘT PHẢI (4/12): CẢNH BÁO NGHIỆP VỤ & THAO TÁC NHANH -->
+      <div class="lg:col-span-4 space-y-3">
+        
+        <!-- KHỐI THAO TÁC NHANH (QUICK ACTIONS) -->
+        <div class="bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-2xs">
+          <h3 class="text-xs font-bold text-gray-700 uppercase tracking-wider mb-2.5">Thao tác nhanh</h3>
+          <div class="grid grid-cols-2 gap-2">
+            <a href="/admin/orders/new" class="flex items-center gap-2 p-2 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition text-xs font-semibold">
+              <span class="text-base">🛒</span> Bán hàng
+            </a>
+            <a href="/admin/purchases/new" class="flex items-center gap-2 p-2 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition text-xs font-semibold">
+              <span class="text-base">📦</span> Nhập hàng
+            </a>
+            <a href="/admin/cash" class="flex items-center gap-2 p-2 rounded-lg bg-amber-50 text-amber-700 hover:bg-amber-100 transition text-xs font-semibold">
+              <span class="text-base">💵</span> Thu / Chi
+            </a>
+            <a href="/admin/repairs" class="flex items-center gap-2 p-2 rounded-lg bg-purple-50 text-purple-700 hover:bg-purple-100 transition text-xs font-semibold">
+              <span class="text-base">🔧</span> Sửa chữa
+            </a>
+          </div>
+        </div>
+
+        <!-- CẢNH BÁO CÔNG NỢ KHÁCH HÀNG -->
+        <div class="bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-2xs space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-gray-700">Công nợ khách hàng</span>
+            <a href="/admin/partners?filter=customer_debt" class="text-[11px] text-blue-600 hover:underline">Chi tiết ›</a>
+          </div>
+          <div class="bg-red-50/70 border border-red-100 rounded-lg p-2.5 flex items-start gap-2.5">
+            <span class="text-base leading-none text-red-600 mt-0.5">⚠️</span>
+            <div class="text-xs text-red-900 leading-relaxed">
+              Có <strong class="text-red-700 font-bold">{debtorCustCount} khách hàng</strong> đang nợ 
+              <strong class="text-red-700 font-bold"> {formatNumber(debtorCustAmount)} đ</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- CẢNH BÁO CÔNG NỢ NHÀ CUNG CẤP -->
+        <div class="bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-2xs space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-gray-700">Nợ cần trả NCC</span>
+            <a href="/admin/partners?filter=supplier_debt" class="text-[11px] text-blue-600 hover:underline">Chi tiết ›</a>
+          </div>
+          <div class="bg-amber-50/70 border border-amber-100 rounded-lg p-2.5 flex items-start gap-2.5">
+            <span class="text-base leading-none text-amber-600 mt-0.5">📋</span>
+            <div class="text-xs text-amber-900 leading-relaxed">
+              Đang nợ <strong class="text-amber-800 font-bold">{debtSuppCount} nhà cung cấp</strong> với số tiền 
+              <strong class="text-amber-800 font-bold"> {formatNumber(debtSuppAmount)} đ</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- CẢNH BÁO TỒN KHO THẤP -->
+        {lowStockCount > 0 && (
+          <div class="bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-2xs space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-gray-700">Cảnh báo tồn kho</span>
+              <a href="/admin/products" class="text-[11px] text-blue-600 hover:underline">Kiểm kho ›</a>
+            </div>
+            <div class="bg-orange-50/70 border border-orange-100 rounded-lg p-2.5 flex items-start gap-2.5">
+              <span class="text-base leading-none text-orange-600 mt-0.5">📦</span>
+              <div class="text-xs text-orange-900 leading-relaxed">
+                Có <strong class="text-orange-800 font-bold">{lowStockCount} mặt hàng</strong> sắp hết kho hoặc tồn bằng 0.
+              </div>
+            </div>
+          </div>
+        )}
+
+        <!-- DÒNG SỰ KIỆN GẦN ĐÂY (REAL LIVE FEED) -->
+        <div class="bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-2xs space-y-3">
+          <div class="flex items-center justify-between border-b border-gray-100 pb-2">
+            <h3 class="text-xs font-bold text-gray-800">Hoạt động gần đây</h3>
+            <span class="text-[10.5px] text-gray-400">Thời gian thực</span>
+          </div>
+
+          <div class="space-y-3 max-h-[340px] overflow-y-auto pr-1 text-xs">
+            {activities.length === 0 ? (
+              <p class="text-xs text-gray-400 py-4 text-center">Chưa có hoạt động nào phát sinh.</p>
+            ) : (
+              activities.map((act) => (
+                <div class="flex items-start gap-2.5 text-gray-600">
+                  <div class="w-6 h-6 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 text-xs font-bold mt-0.5">
+                    {act.event_type === 'ORDER' ? '🛍️' : act.event_type === 'PURCHASE' ? '📥' : '🔧'}
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <p class="leading-tight">
+                      <strong class="text-gray-900 font-semibold">{act.actor}</strong>
+                      {' '}{act.action_text}{' '}
+                      {act.code && <span class="text-blue-600 font-medium">#{act.code}</span>}
+                      {act.amount_cents > 0 && (
+                        <span> với giá trị <strong class="text-gray-900 font-bold tabular-nums">{formatShort(act.amount_cents)}</strong></span>
+                      )}
+                    </p>
+                    <span class="text-[10px] text-gray-400 block mt-0.5">{timeAgo(act.created_at)}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+</AdminLayout>

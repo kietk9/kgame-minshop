@@ -1,0 +1,477 @@
+---
+import { env } from 'cloudflare:workers';
+import { getPosOrderById } from '../../../../features/kgame/db';
+
+export const prerender = false;
+
+const rawId = Astro.params.id;
+let orderId = Number(rawId);
+
+// Support lookup by order_code if string like ĐH0001
+if (isNaN(orderId)) {
+  const match = await env.DB.prepare('SELECT id FROM orders WHERE order_code = ? LIMIT 1').bind(rawId).first<{ id: number }>();
+  if (match) orderId = match.id;
+}
+
+if (!orderId) {
+  return new Response('Không tìm thấy đơn hàng', { status: 404 });
+}
+
+const order = await getPosOrderById(env.DB, orderId);
+
+if (!order) {
+  return new Response('Không tìm thấy đơn hàng', { status: 404 });
+}
+
+const formatNumber = (val: number) => {
+  if (!val || isNaN(val)) return '0';
+  return new Intl.NumberFormat('en-US').format(val);
+};
+const formatVND = formatNumber;
+
+const formatDate = (iso: string) => {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
+  } catch {
+    return iso;
+  }
+};
+
+const remainingDebt = Math.max(0, order.amount_total_cents - order.paid_amount_cents);
+---
+
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hóa đơn bán hàng {order.order_code} — Trung Kiên Game</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 12mm 15mm;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #111827;
+      background: #fff;
+      margin: 0;
+      padding: 20px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .invoice-card {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 2px solid #2563eb;
+      padding-bottom: 12px;
+      margin-bottom: 16px;
+    }
+    .brand-name {
+      font-size: 22px;
+      font-weight: 800;
+      color: #1e40af;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .brand-sub {
+      font-size: 12px;
+      color: #4b5563;
+      margin-top: 2px;
+    }
+    .brand-contact {
+      font-size: 11px;
+      color: #6b7280;
+      margin-top: 4px;
+    }
+    .invoice-title-box {
+      text-align: right;
+    }
+    .invoice-title {
+      font-size: 18px;
+      font-weight: 800;
+      color: #111827;
+      text-transform: uppercase;
+    }
+    .order-code {
+      font-size: 16px;
+      font-weight: 700;
+      color: #2563eb;
+      font-family: monospace;
+      margin-top: 2px;
+    }
+    .date-str {
+      font-size: 11px;
+      color: #6b7280;
+      margin-top: 2px;
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 16px;
+      margin-bottom: 16px;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 12px 16px;
+    }
+    .meta-block h4 {
+      margin: 0 0 6px 0;
+      font-size: 12px;
+      text-transform: uppercase;
+      color: #374151;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+    .meta-row {
+      margin-bottom: 4px;
+      font-size: 12px;
+      display: flex;
+    }
+    .meta-label {
+      width: 100px;
+      color: #6b7280;
+      flex-shrink: 0;
+    }
+    .meta-val {
+      font-weight: 600;
+      color: #111827;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 16px;
+    }
+    th {
+      background: #f3f4f6;
+      color: #374151;
+      font-weight: 700;
+      font-size: 11px;
+      text-transform: uppercase;
+      padding: 8px 10px;
+      border: 1px solid #e5e7eb;
+      text-align: left;
+    }
+    td {
+      padding: 8px 10px;
+      border: 1px solid #e5e7eb;
+      font-size: 12px;
+      vertical-align: top;
+    }
+    .text-center { text-align: center; }
+    .text-right { text-align: right; }
+    .unit-tag {
+      display: inline-block;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      color: #1e40af;
+      font-family: monospace;
+      font-weight: 700;
+      font-size: 11px;
+      padding: 1px 6px;
+      border-radius: 4px;
+      margin-top: 3px;
+    }
+    .totals-area {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 16px;
+    }
+    .totals-table {
+      width: 320px;
+      border: none;
+      margin-bottom: 0;
+    }
+    .totals-table td {
+      border: none;
+      padding: 4px 0;
+    }
+    .totals-table .total-row {
+      border-top: 1px solid #e5e7eb;
+      font-size: 14px;
+      font-weight: 800;
+      color: #111827;
+      padding-top: 6px;
+    }
+    .totals-table .paid-row {
+      color: #059669;
+      font-weight: 700;
+    }
+    .totals-table .remaining-row {
+      color: #dc2626;
+      font-weight: 800;
+      font-size: 13px;
+    }
+    .terms-box {
+      border: 1px dashed #cbd5e1;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 11px;
+      color: #475569;
+      margin-bottom: 24px;
+      background: #f8fafc;
+    }
+    .terms-box ol {
+      margin: 4px 0 0 0;
+      padding-left: 18px;
+    }
+    .signatures {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 40px;
+      text-align: center;
+      margin-top: 16px;
+      padding-top: 8px;
+    }
+    .sig-title {
+      font-weight: 700;
+      font-size: 12px;
+      text-transform: uppercase;
+      color: #111827;
+    }
+    .sig-sub {
+      font-size: 11px;
+      color: #6b7280;
+      font-style: italic;
+      margin-top: 2px;
+    }
+    .sig-space {
+      height: 70px;
+    }
+    .sig-name {
+      font-weight: 600;
+      font-size: 12px;
+      color: #374151;
+    }
+    .no-print-bar {
+      background: #1e293b;
+      color: #fff;
+      padding: 10px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    }
+    .btn-print {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      padding: 6px 16px;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .btn-back {
+      color: #94a3b8;
+      text-decoration: none;
+      font-size: 13px;
+    }
+    @media print {
+      .no-print-bar {
+        display: none !important;
+      }
+      body {
+        padding: 0 !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="no-print-bar">
+    <a href={`/admin/orders/${order.id}`} class="btn-back">← Quay lại Chi Tiết Đơn Hàng</a>
+    <div style="font-size: 12px; color: #cbd5e1;">Mẫu in Hóa Đơn & Bảo Hành Khổ A4/A5</div>
+    <button onclick="window.print()" class="btn-print">🖨️ In Hóa Đơn Ngay</button>
+  </div>
+
+  <div class="invoice-card" style="margin-top: 40px;">
+    <!-- HEADER -->
+    <div class="header">
+      <div>
+        <div class="brand-name">TRUNG KIÊN GAME (KGAME)</div>
+        <div class="brand-sub">Chuyên Máy Bắn Cá, Bo Mạch &amp; Linh Kiện Cao Cấp</div>
+        <div class="brand-contact">
+          Hotline / Zalo: <strong>0901.234.567</strong> — Địa chỉ: Xưởng Kgame, TP. Biên Hòa, Đồng Nai
+        </div>
+      </div>
+      <div class="invoice-title-box">
+        <div class="invoice-title">HÓA ĐƠN BÁN HÀNG</div>
+        <div class="order-code">Số: {order.order_code}</div>
+        <div class="date-str">Ngày: {formatDate(order.created_at)}</div>
+      </div>
+    </div>
+
+    <!-- META KHÁCH HÀNG & GIAO NHẬN -->
+    <div class="meta-grid">
+      <div class="meta-block">
+        <h4>Thông Tin Khách Hàng</h4>
+        <div class="meta-row">
+          <span class="meta-label">Khách hàng:</span>
+          <span class="meta-val">{order.customer_name || 'Khách vãng lai'}</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">Số điện thoại:</span>
+          <span class="meta-val font-mono">{order.customer_phone || '-'}</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">Địa chỉ nhận:</span>
+          <span class="meta-val">{order.shipment?.receiver_address || order.customer_address || 'Nhận tại quầy'}</span>
+        </div>
+      </div>
+
+      <div class="meta-block">
+        <h4>Hình Thức Giao Nhận</h4>
+        <div class="meta-row">
+          <span class="meta-label">Phương thức:</span>
+          <span class="meta-val">
+            {order.shipment?.carrier === 'PICKUP' && '🏢 Nhận tại xưởng / quầy'}
+            {order.shipment?.carrier === 'BUS' && '🚌 Gửi Xe Khách / Chành Xe'}
+            {order.shipment?.carrier === 'GHN' && '📦 Chuyển phát bưu điện / GHN'}
+            {!order.shipment && '🏢 Nhận tại xưởng'}
+          </span>
+        </div>
+        {order.shipment?.carrier === 'BUS' && (
+          <>
+            <div class="meta-row">
+              <span class="meta-label">Nhà xe / Bến:</span>
+              <span class="meta-val">{order.shipment.bus_station || '-'}</span>
+            </div>
+            <div class="meta-row">
+              <span class="meta-label">Biển số / Tài:</span>
+              <span class="meta-val">{order.shipment.bus_plate || '-'}</span>
+            </div>
+          </>
+        )}
+        {order.shipment?.carrier === 'GHN' && (
+          <div class="meta-row">
+            <span class="meta-label">Mã vận đơn:</span>
+            <span class="meta-val font-mono">{order.shipment.tracking_code || '-'}</span>
+          </div>
+        )}
+      </div>
+    </div>
+
+    <!-- BẢNG HÀNG HÓA -->
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 35px;" class="text-center">STT</th>
+          <th>Tên Hàng Hóa &amp; Phiên Bản</th>
+          <th style="width: 140px;">Mã Bộ / Program Code</th>
+          <th style="width: 60px;" class="text-center">Tình trạng</th>
+          <th style="width: 40px;" class="text-center">SL</th>
+          <th style="width: 100px;" class="text-right">Đơn giá</th>
+          <th style="width: 110px;" class="text-right">Thành tiền</th>
+        </tr>
+      </thead>
+      <tbody>
+        {order.lines?.map((line: any, idx: number) => (
+          <tr>
+            <td class="text-center">{idx + 1}</td>
+            <td>
+              <div style="font-weight: 700; color: #111827;">{line.product_name_snapshot}</div>
+              <div style="font-size: 11px; color: #6b7280;">Bản: {line.type_name_snapshot}</div>
+            </td>
+            <td>
+              {line.units && line.units.length > 0 ? (
+                line.units.map((u: any) => (
+                  <div class="unit-tag">{u.program_code}</div>
+                ))
+              ) : (
+                <span style="color: #9ca3af; font-style: italic;">Theo số lượng</span>
+              )}
+            </td>
+            <td class="text-center" style="font-weight: 600; font-size: 11px;">
+              {line.condition === 'NEW' ? 'Mới 100%' : 'QSD'}
+            </td>
+            <td class="text-center" style="font-weight: 700;">{line.quantity}</td>
+            <td class="text-right">{formatVND(line.unit_price_cents)}</td>
+            <td class="text-right" style="font-weight: 700;">{formatVND(line.line_total_cents)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+
+    <!-- TỔNG KẾT THANH TOÁN -->
+    <div class="totals-area">
+      <table class="totals-table">
+        <tr>
+          <td style="color: #6b7280;">Tổng tiền hàng:</td>
+          <td class="text-right" style="font-weight: 600;">{formatVND(order.amount_total_cents + order.discount_cents - order.shipping_cents)}</td>
+        </tr>
+        {order.discount_cents > 0 && (
+          <tr>
+            <td style="color: #059669;">Chiết khấu:</td>
+            <td class="text-right" style="color: #059669; font-weight: 600;">-{formatVND(order.discount_cents)}</td>
+          </tr>
+        )}
+        {order.shipping_cents > 0 && (
+          <tr>
+            <td style="color: #6b7280;">Cước xe / vận chuyển:</td>
+            <td class="text-right" style="font-weight: 600;">+{formatVND(order.shipping_cents)}</td>
+          </tr>
+        )}
+        <tr class="total-row">
+          <td>TỔNG THANH TOÁN:</td>
+          <td class="text-right" style="color: #2563eb;">{formatVND(order.amount_total_cents)}</td>
+        </tr>
+        <tr class="paid-row">
+          <td>Đã thanh toán (Sổ quỹ):</td>
+          <td class="text-right">
+            {formatVND(order.paid_amount_cents)}
+            {order.cash_transactions && order.cash_transactions.length > 0 && (
+              <span style="font-size: 10px; color: #059669; display: block; font-weight: normal;">
+                ({order.cash_transactions.map((tx: any) => tx.transaction_code).join(', ')})
+              </span>
+            )}
+          </td>
+        </tr>
+        <tr class="remaining-row">
+          <td>Còn lại cần thu (COD / Nợ):</td>
+          <td class="text-right">{formatVND(remainingDebt)}</td>
+        </tr>
+      </table>
+    </div>
+
+    <!-- ĐIỀU KHOẢN BẢO HÀNH -->
+    <div class="terms-box">
+      <strong>QUY ĐỊNH BẢO HÀNH &amp; KỸ THUẬT:</strong>
+      <ol>
+        <li>Sản phẩm máy bắn cá và bo mạch chính hãng KGAME được bảo hành theo đúng tem niêm phong và mã bộ Program Code in trên phiếu này.</li>
+        <li>Không bảo hành trong các trường hợp rách tem niêm phong, chập cháy do sai nguồn điện, ngập nước, sét đánh hoặc can thiệp kỹ thuật trái phép.</li>
+        <li>Quý khách vui lòng kiểm tra kỹ số lượng, ngoại quan máy và phụ kiện trước khi nhận hàng từ chành xe / quầy kỹ thuật.</li>
+      </ol>
+    </div>
+
+    <!-- CHỮ KÝ -->
+    <div class="signatures">
+      <div>
+        <div class="sig-title">Khách Hàng / Người Nhận</div>
+        <div class="sig-sub">(Ký và ghi rõ họ tên)</div>
+        <div class="sig-space"></div>
+        <div class="sig-name">{order.customer_name || '................................................'}</div>
+      </div>
+      <div>
+        <div class="sig-title">Đại Diện Trung Kiên Game</div>
+        <div class="sig-sub">(Ký, đóng dấu hoặc xác nhận)</div>
+        <div class="sig-space"></div>
+        <div class="sig-name">Kỹ Thuật Xuất Xưởng Kgame</div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

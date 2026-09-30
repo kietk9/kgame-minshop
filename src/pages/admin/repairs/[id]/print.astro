@@ -1,0 +1,298 @@
+---
+import { env } from 'cloudflare:workers';
+import { getRepairTicketById } from '../../../../features/kgame/db';
+import { getConfig } from '../../../../config';
+
+export const prerender = false;
+
+const ticketId = Number(Astro.params.id);
+if (!ticketId) {
+  return Astro.redirect('/admin/repairs');
+}
+
+const data = await getRepairTicketById(env.DB, ticketId);
+if (!data || !data.ticket) {
+  return Astro.redirect('/admin/repairs?error=not_found');
+}
+
+const { ticket, items } = data;
+const config = getConfig();
+const storeName = Astro.locals.settings?.storeName ?? 'TRUNG KIÊN GAME (KGAME)';
+
+// Lấy cấu hình hotline, địa chỉ và điều khoản sửa chữa từ settings
+const { results: customSettings } = await env.DB.prepare(`
+  SELECT key, value FROM settings WHERE key IN ('store_hotline', 'store_address', 'repair_terms')
+`).all<{ key: string; value: string }>();
+
+const settingsMap = new Map((customSettings ?? []).map((s) => [s.key, s.value]));
+
+const storeHotline = settingsMap.get('store_hotline') || '09xx.xxx.xxx — Hỗ trợ kỹ thuật';
+const storeAddress = settingsMap.get('store_address') || 'Biên Hòa, Đồng Nai';
+const repairTerms = settingsMap.get('repair_terms') || `1. Quý khách vui lòng xuất trình phiếu tiếp nhận này khi đến nhận lại thiết bị.
+2. Cửa hàng không chịu trách nhiệm về dữ liệu phần mềm cài riêng của khách hàng trên bộ nhớ ngoài nếu chưa sao lưu trước.
+3. Sau 30 ngày kể từ ngày hẹn trả nếu quý khách không đến nhận hoặc không liên lạc được, cửa hàng sẽ thanh lý linh kiện để bù đắp chi phí lưu kho.`;
+
+const formatVND = (cents: number) => {
+  return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(cents);
+};
+
+const formatDate = (dStr?: string | null) => {
+  if (!dStr) return '---';
+  try {
+    const d = new Date(dStr);
+    return isNaN(d.getTime()) ? dStr : d.toLocaleDateString('vi-VN');
+  } catch {
+    return dStr;
+  }
+};
+
+const formatDateTime = (dStr?: string | null) => {
+  if (!dStr) return '---';
+  try {
+    const d = new Date(dStr);
+    return isNaN(d.getTime()) ? dStr : d.toLocaleString('vi-VN');
+  } catch {
+    return dStr;
+  }
+};
+---
+
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Phiếu tiếp nhận {ticket.ticket_code} — {storeName}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: 'Be Vietnam Pro', 'Inter', -apple-system, sans-serif;
+        color: #18181b;
+        background-color: #f4f4f5;
+        margin: 0;
+        padding: 24px;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .receipt-container {
+        max-width: 800px;
+        margin: 0 auto;
+        background: #ffffff;
+        border: 1px solid #e4e4e7;
+        border-radius: 12px;
+        padding: 32px 36px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+      }
+      .no-print-bar {
+        max-width: 800px;
+        margin: 0 auto 16px auto;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 16px;
+        font-size: 13px;
+        font-weight: 600;
+        border-radius: 8px;
+        cursor: pointer;
+        text-decoration: none;
+      }
+      .btn-primary {
+        background: #18181b;
+        color: #ffffff;
+        border: 1px solid #18181b;
+      }
+      .btn-primary:hover {
+        background: #27272a;
+      }
+      .btn-secondary {
+        background: #ffffff;
+        color: #3f3f46;
+        border: 1px solid #d4d4d8;
+      }
+      .btn-secondary:hover {
+        background: #f4f4f5;
+      }
+
+      /* In ấn */
+      @media print {
+        body {
+          background: #ffffff;
+          padding: 0;
+          font-size: 12pt;
+        }
+        .receipt-container {
+          border: none;
+          box-shadow: none;
+          padding: 0;
+          max-width: 100%;
+        }
+        .no-print-bar {
+          display: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Thanh điều hướng trước khi in -->
+    <div class="no-print-bar">
+      <a href={`/admin/repairs/${ticket.id}`} class="btn btn-secondary">
+        ← Quay lại phiếu sửa
+      </a>
+      <div style="display: flex; gap: 8px;">
+        <button onclick="window.print()" class="btn btn-primary">
+          🖨️ Bấm vào đây để In Phiếu
+        </button>
+      </div>
+    </div>
+
+    <!-- Khổ phiếu in chuẩn -->
+    <div class="receipt-container">
+      <!-- Đầu phiếu: Logo & Thông tin cửa hàng -->
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #18181b; padding-bottom: 16px; margin-bottom: 20px;">
+        <div>
+          <h2 style="margin: 0 0 4px 0; font-size: 20px; font-weight: 800; text-transform: uppercase; letter-spacing: -0.5px;">
+            {storeName}
+          </h2>
+          <div style="color: #52525b; font-size: 13px;">
+            Chuyên phần mềm, bo mạch, linh kiện & máy bắn cá cao cấp
+          </div>
+          <div style="color: #71717a; font-size: 12px; margin-top: 2px;">
+            Hotline: {storeHotline} • {storeAddress}
+          </div>
+        </div>
+        <div style="text-align: right;">
+          <div style="font-family: monospace; font-size: 22px; font-weight: 800; color: #18181b; letter-spacing: 1px;">
+            {ticket.ticket_code}
+          </div>
+          <div style="font-size: 12px; color: #71717a; margin-top: 4px;">
+            Ngày lập: {formatDateTime(ticket.created_at)}
+          </div>
+        </div>
+      </div>
+
+      <!-- Tiêu đề phiếu -->
+      <div style="text-align: center; margin-bottom: 24px;">
+        <h1 style="margin: 0; font-size: 20px; font-weight: 800; text-transform: uppercase; color: #09090b; letter-spacing: 0.5px;">
+          PHIẾU TIẾP NHẬN SỬA CHỮA & BẢO HÀNH
+        </h1>
+        <div style="font-size: 12px; color: #71717a; margin-top: 4px;">
+          (Quý khách vui lòng giữ phiếu này để đối chiếu khi nhận lại thiết bị)
+        </div>
+      </div>
+
+      <!-- Khối 1: Thông tin khách hàng & Thiết bị (2 cột) -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; background: #fafafa; border: 1px solid #e4e4e7; border-radius: 8px; padding: 16px;">
+        <div>
+          <div style="font-weight: 700; font-size: 12px; text-transform: uppercase; color: #71717a; margin-bottom: 8px;">
+            Thông tin Khách hàng
+          </div>
+          <div style="font-size: 15px; font-weight: 700; color: #18181b; margin-bottom: 4px;">
+            {ticket.customer_name || 'Khách vãng lai'}
+            {ticket.customer_code && <span style="font-size: 12px; font-family: monospace; font-weight: normal; color: #71717a;">({ticket.customer_code})</span>}
+          </div>
+          <div style="color: #3f3f46; margin-bottom: 4px;">
+            <strong>Điện thoại:</strong> <span style="font-family: monospace; font-weight: 600;">{ticket.customer_phone || '---'}</span>
+          </div>
+          <div style="color: #3f3f46;">
+            <strong>Địa chỉ:</strong> {ticket.customer_address || 'Chưa cập nhật'}
+          </div>
+        </div>
+
+        <div>
+          <div style="font-weight: 700; font-size: 12px; text-transform: uppercase; color: #71717a; margin-bottom: 8px;">
+            Thông tin Thiết bị tiếp nhận
+          </div>
+          <div style="font-size: 15px; font-weight: 700; color: #18181b; margin-bottom: 4px;">
+            {ticket.product_name ? `${ticket.product_name} ${ticket.product_type_name ? `(${ticket.product_type_name})` : ''}` : ticket.unidentified_product_name || 'Thiết bị tiếp nhận'}
+          </div>
+          {ticket.program_code && (
+            <div style="color: #92400e; font-weight: 700; font-family: monospace; margin-bottom: 4px;">
+              Mã bộ máy: {ticket.program_code}
+            </div>
+          )}
+          <div style="color: #3f3f46; margin-bottom: 4px;">
+            <strong>Kỹ thuật tiếp nhận:</strong> {ticket.assigned_to || 'Kỹ thuật viên KGAME'}
+          </div>
+          <div style="color: #3f3f46;">
+            <strong>Ngày hẹn trả dự kiến:</strong> <span style="font-weight: 700; color: #047857;">{formatDate(ticket.expected_return_at)}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Khối 2: Chi tiết tình trạng & Phụ kiện kèm theo -->
+      <div style="border: 1px solid #e4e4e7; border-radius: 8px; overflow: hidden; margin-bottom: 20px;">
+        <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;">
+          <tbody>
+            <tr style="border-bottom: 1px solid #e4e4e7; background: #fafafa;">
+              <td style="width: 28%; padding: 10px 14px; font-weight: 700; color: #52525b;">Hiện tượng / Lỗi máy:</td>
+              <td style="padding: 10px 14px; font-weight: 600; color: #dc2626;">
+                {ticket.problem_reported}
+              </td>
+            </tr>
+            <tr style="border-bottom: 1px solid #e4e4e7;">
+              <td style="padding: 10px 14px; font-weight: 700; color: #52525b;">Phụ kiện nhận kèm:</td>
+              <td style="padding: 10px 14px; color: #18181b;">
+                {ticket.accessories_received || 'Chỉ nhận thân máy / Không kèm phụ kiện'}
+              </td>
+            </tr>
+            {ticket.diagnosis && (
+              <tr style="border-bottom: 1px solid #e4e4e7; background: #fafafa;">
+                <td style="padding: 10px 14px; font-weight: 700; color: #52525b;">Chẩn đoán kỹ thuật:</td>
+                <td style="padding: 10px 14px; color: #18181b;">
+                  {ticket.diagnosis}
+                </td>
+              </tr>
+            )}
+            <tr>
+              <td style="padding: 10px 14px; font-weight: 700; color: #52525b;">Chi phí dự kiến thu khách:</td>
+              <td style="padding: 10px 14px; font-size: 16px; font-family: monospace; font-weight: 800; color: #047857;">
+                {ticket.repair_price_cents > 0 ? formatVND(ticket.repair_price_cents) : 'Báo sau khi kiểm tra xong'}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Quy định bảo hành & lưu ý (Có thể cấu hình trong cài đặt hệ thống) -->
+      <div style="background: #f8fafc; border-left: 3px solid #64748b; padding: 12px 16px; font-size: 11.5px; color: #334155; margin-bottom: 30px; line-height: 1.65; white-space: pre-line;">
+        <strong style="display: block; margin-bottom: 4px; font-size: 12px; color: #0f172a; text-transform: uppercase;">QUY ĐỊNH LƯU Ý KHI SỬA CHỮA:</strong>
+        {repairTerms}
+      </div>
+
+      <!-- Chữ ký 2 bên -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 40px; text-align: center; margin-top: 30px; page-break-inside: avoid;">
+        <div>
+          <div style="font-weight: 700; font-size: 13px; text-transform: uppercase;">KHÁCH HÀNG BÀN GIAO</div>
+          <div style="font-size: 11px; color: #71717a;">(Ký và ghi rõ họ tên)</div>
+          <div style="height: 70px;"></div>
+          <div style="font-weight: 600; color: #18181b;">{ticket.customer_name || 'Khách hàng'}</div>
+        </div>
+
+        <div>
+          <div style="font-weight: 700; font-size: 13px; text-transform: uppercase;">NGƯỜI TIẾP NHẬN MÁY</div>
+          <div style="font-size: 11px; color: #71717a;">(Ký và đóng dấu nếu có)</div>
+          <div style="height: 70px;"></div>
+          <div style="font-weight: 600; color: #18181b;">{ticket.assigned_to || 'Kỹ thuật viên KGAME'}</div>
+        </div>
+      </div>
+    </div>
+
+    <script is:inline>
+      if (new URLSearchParams(window.location.search).get('auto') === '1') {
+        window.onload = () => {
+          setTimeout(() => window.print(), 300);
+        };
+      }
+    </script>
+  </body>
+</html>

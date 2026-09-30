@@ -1,0 +1,9 @@
+{
+  "fresh_migrations": "PASS",
+  "synthetic_fixture": "PASS",
+  "refuses_nonempty_database": "PASS",
+  "refuses_remote_origin": "PASS",
+  "preserves_existing_secret_file": "PASS",
+  "setup_page_http": 200,
+  "platform": "macOS; Linux not yet executed"
+}

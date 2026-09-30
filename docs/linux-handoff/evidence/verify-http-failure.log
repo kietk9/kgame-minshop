@@ -1,0 +1,402 @@
+
+> minshop@0.1.0 verify
+> npm run theme:sync && vitest run && astro check && npm run theme:check && astro build && node scripts/check-built-css.mjs && npm run test:integration && node --experimental-strip-types scripts/check-stripe-countries.mjs && npm run mcp:check && npm run scaffold:check
+
+
+> minshop@0.1.0 theme:sync
+> node scripts/theme-sync.mjs
+
+themes: default, market, studio — active for this process: default (from theme.config.json)
+
+ RUN  v4.1.10 <HANDOFF_WORKSPACE>/outputs/KGAME_LINUX_HANDOVER_2026-09-29/project
+
+
+ Test Files  86 passed (86)
+      Tests  952 passed (952)
+   Start at  19:20:12
+   Duration  2.59s (transform 3.38s, setup 0ms, import 6.01s, tests 2.84s, environment 6ms)
+
+19:20:16 [@astrojs/cloudflare] Enabling sessions with Cloudflare KV with the "SESSION" KV binding.
+19:20:16 [vite] Re-optimizing dependencies because vite config has changed
+19:20:16 [vite] Re-optimizing dependencies because vite config has changed
+19:20:17 [types] Generated 343ms
+19:20:17 [check] Getting diagnostics for Astro files in <HANDOFF_WORKSPACE>/outputs/KGAME_LINUX_HANDOVER_2026-09-29/project...
+create-minshop/src/scaffold.js:1:30 - warning ts(6133): 'readdirSync' is declared but its value is never read.
+
+1 import { cpSync, existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+                               ~~~~~~~~~~~
+
+src/components/admin/PartnerModal.astro:208:9 - warning astro(4000): This script will be treated as if it has the `is:inline` directive because it contains an attribute. Therefore, features that require processing (e.g. using TypeScript or npm packages in the script) are unavailable.
+
+See docs for more details: https://docs.astro.build/en/guides/client-side-scripts/#script-processing.
+
+Add the `is:inline` directive explicitly to silence this hint.
+
+208 <script define:vars={{ modalId }}>
+            ~~~~~~~~~~~
+
+src/components/admin/PayDebtModal.astro:271:49 - warning ts(6133): 'idx' is declared but its value is never read.
+
+271       docsBody.innerHTML = unpaidDocs.map((doc, idx) => {
+                                                    ~~~
+
+src/components/admin/QuickProductModal.astro:549:18 - warning ts(6387): The signature '(commandId: string, showUI?: boolean | undefined, value?: string | undefined): boolean' of 'document.execCommand' is deprecated.
+
+549         document.execCommand(cmd, false, undefined);
+                     ~~~~~~~~~~~
+
+src/pages/checkout.astro:293:23 - warning ts(6133): 'result' is declared but its value is never read.
+
+293                 const result = await provider.createCheckout({
+                          ~~~~~~
+
+src/pages/admin/login.astro:60:11 - warning ts(6133): 'identity' is declared but its value is never read.
+
+60     const identity = await resolveStaff(env.DB,staff,cred.tagSource);
+             ~~~~~~~~
+
+src/pages/admin/sale.astro:2322:81 - warning ts(6133): 'e' is declared but its value is never read.
+
+2322       document.getElementById('enableCodCheckbox')?.addEventListener('change', (e) => {
+                                                                                     ~
+src/pages/admin/sale.astro:1084:82 - warning ts(6133): 'senderInfo' is declared but its value is never read.
+
+1084       const { products, productTypes, inStockUnits, customers, deliveryPartners, senderInfo, initialPreorderData, authority } = window.POS_DATA;
+                                                                                      ~~~~~~~~~~
+src/pages/admin/sale.astro:1084:64 - warning ts(6133): 'deliveryPartners' is declared but its value is never read.
+
+1084       const { products, productTypes, inStockUnits, customers, deliveryPartners, senderInfo, initialPreorderData, authority } = window.POS_DATA;
+                                                                    ~~~~~~~~~~~~~~~~
+
+src/pages/admin/buybacks/new.astro:315:25 - warning ts(6133): 'defaultUnitId' is declared but its value is never read.
+
+315     function addItemRow(defaultUnitId?: number) {
+                            ~~~~~~~~~~~~~
+
+src/pages/admin/inventory/outbound/new.astro:244:11 - warning astro(4000): This script will be treated as if it has the `is:inline` directive because it contains an attribute. Therefore, features that require processing (e.g. using TypeScript or npm packages in the script) are unavailable.
+
+See docs for more details: https://docs.astro.build/en/guides/client-side-scripts/#script-processing.
+
+Add the `is:inline` directive explicitly to silence this hint.
+
+244   <script define:vars={{ products, inStockUnits, canViewCost, productTypes }}>
+              ~~~~~~~~~~~
+
+src/pages/admin/orders/index.astro:14:17 - warning ts(6133): 'total' is declared but its value is never read.
+
+14 const { orders, total } = await listPosOrders(env.DB, {
+                   ~~~~~
+
+src/pages/admin/production/new.astro:37:7 - warning ts(6133): 'formatVnd' is declared but its value is never read.
+
+37 const formatVnd = formatNumber;
+         ~~~~~~~~~
+src/pages/admin/production/new.astro:268:9 - warning astro(4000): This script will be treated as if it has the `is:inline` directive because it contains an attribute. Therefore, features that require processing (e.g. using TypeScript or npm packages in the script) are unavailable.
+
+See docs for more details: https://docs.astro.build/en/guides/client-side-scripts/#script-processing.
+
+Add the `is:inline` directive explicitly to silence this hint.
+
+268 <script define:vars={{ outputTypes, components }}>
+            ~~~~~~~~~~~
+
+src/pages/admin/products/index.astro:164:10 - warning ts(6133): 'formatVnd' is declared but its value is never read.
+
+164 function formatVnd(cents: number) {
+             ~~~~~~~~~
+src/pages/admin/products/index.astro:162:7 - warning ts(6133): 'formatPlainNumber' is declared but its value is never read.
+
+162 const formatPlainNumber = formatNumber;
+          ~~~~~~~~~~~~~~~~~
+src/pages/admin/products/index.astro:153:14 - warning ts(6133): 'u' is declared but its value is never read.
+
+153   for (const u of (directUnits ?? [])) {
+                 ~
+src/pages/admin/products/index.astro:148:9 - warning ts(6133): 'placeholders' is declared but its value is never read.
+
+148   const placeholders = productIds.map(() => '?').join(',');
+            ~~~~~~~~~~~~
+src/pages/admin/products/index.astro:146:5 - warning ts(6133): 'unitsByProduct' is declared but its value is never read.
+
+146 let unitsByProduct: Record<number, any[]> = {};
+        ~~~~~~~~~~~~~~
+src/pages/admin/products/index.astro:1051:11 - warning ts(6133): 'colMenuWrapper' is declared but its value is never read.
+
+1051     const colMenuWrapper = document.getElementById('col-customizer-wrapper');
+               ~~~~~~~~~~~~~~
+src/pages/admin/products/index.astro:772:105 - warning ts(6385): 'event' is deprecated.
+
+772                       <td class="px-3.5 py-3 text-center whitespace-nowrap" data-col="actions" onclick="event.stopPropagation()">
+                                                                                                            ~~~~~
+src/pages/admin/products/index.astro:677:36 - warning ts(6385): 'event' is deprecated.
+
+677                           onclick="event.stopPropagation()"
+                                       ~~~~~
+src/pages/admin/products/index.astro:658:68 - warning ts(6385): 'event' is deprecated.
+
+658                       <td class="px-3.5 py-3 text-center" onclick="event.stopPropagation()">
+                                                                       ~~~~~
+
+src/pages/admin/purchases/index.astro:267:100 - warning ts(6385): 'event' is deprecated.
+
+267                       {r.pending_refund_cents > 0 && <a href={`/admin/purchases/${r.id}`} onclick="event.stopPropagation()" class="block text-xs text-amber-700">Chờ nhận hoàn: {formatVND(r.pending_refund_cents)}đ</a>}
+                                                                                                       ~~~~~
+src/pages/admin/purchases/index.astro:262:64 - warning ts(6385): 'event' is deprecated.
+
+262                     <td class="px-3 py-3 text-center" onclick="event.stopPropagation()">
+                                                                   ~~~~~
+
+src/pages/admin/purchases/new.astro:793:13 - warning ts(6133): 'otherFee' is declared but its value is never read.
+
+793       const otherFee = Number(otherFeeInput?.value.replace(/\D/g, '')) || 0;
+                ~~~~~~~~
+src/pages/admin/purchases/new.astro:367:11 - warning ts(6133): 'suppliers' is declared but its value is never read.
+
+367     const suppliers = (window as any).KGAME_SUPPLIERS || [];
+              ~~~~~~~~~
+src/pages/admin/purchases/new.astro:366:11 - warning ts(6133): 'productTypes' is declared but its value is never read.
+
+366     const productTypes = (window as any).KGAME_PRODUCT_TYPES || [];
+              ~~~~~~~~~~~~
+
+src/pages/admin/repairs/new.astro:427:46 - warning ts(6133): 'e' is declared but its value is never read.
+
+427       selectType.addEventListener('change', (e) => {
+                                                 ~
+
+src/pages/admin/repairs/[id]/index.astro:28:7 - warning ts(6133): 'isFullyPaid' is declared but its value is never read.
+
+28 const isFullyPaid = (ticket.repair_price_cents || 0) > 0 && totalCollected >= (ticket.repair_price_cents || 0);
+         ~~~~~~~~~~~
+src/pages/admin/repairs/[id]/index.astro:1254:7 - warning ts(7027): Unreachable code detected.
+
+1254       btnCash?.addEventListener('click', selectCash);
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1255       btnBank?.addEventListener('click', selectBank);
+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ ... 
+1284         }
+     ~~~~~~~~~
+1285       });
+     ~~~~~~~~~
+src/pages/admin/repairs/[id]/index.astro:1230:7 - warning ts(7027): Unreachable code detected.
+
+1230       const btnCash = document.getElementById('btnPayCash');
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1231       const btnBank = document.getElementById('btnPayBank');
+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ ... 
+1235       const chkPayPartner = document.getElementById('chkPayPartner');
+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1236       const partnerPayoutDetails = document.getElementById('partnerPayoutDetails');
+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/pages/admin/repairs/[id]/index.astro:149:89 - warning ts(7027): Unreachable code detected.
+
+ 149                 onclick="return confirm('Xác nhận hoàn tất và nhập máy lại kho KGAME?')"
+                                                                                             
+ 150                 class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700"
+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ ... 
+1285       });
+     ~~~~~~~~~
+1286     })();
+     ~~~~~~~~~
+
+src/pages/admin/repairs/[id]/print.astro:19:7 - warning ts(6133): 'config' is declared but its value is never read.
+
+19 const config = getConfig();
+         ~~~~~~
+src/pages/admin/repairs/[id]/print.astro:18:17 - warning ts(6133): 'items' is declared but its value is never read.
+
+18 const { ticket, items } = data;
+                   ~~~~~
+
+src/pages/admin/reports/daily.astro:51:7 - warning ts(6133): 'totalOrderPaid' is declared but its value is never read.
+
+51 const totalOrderPaid = orders.reduce((s, o) => s + (o.paid_amount_cents || 0), 0);
+         ~~~~~~~~~~~~~~
+
+Result (498 files): 
+- 0 errors
+- 0 warnings
+- 36 hints
+
+
+> minshop@0.1.0 theme:check
+> node scripts/check-themes.mjs
+
+storefront boundary: ok
+19:20:37 [@astrojs/cloudflare] Enabling sessions with Cloudflare KV with the "SESSION" KV binding.
+19:20:37 [types] Generated 39ms
+19:20:37 [build] output: "server"
+19:20:37 [build] mode: "server"
+19:20:37 [build] directory: <HANDOFF_WORKSPACE>/outputs/KGAME_LINUX_HANDOVER_2026-09-29/project/dist/
+19:20:37 [build] adapter: @astrojs/cloudflare
+19:20:37 [build] Collecting build info...
+19:20:37 [build] ✓ Completed in 77ms.
+19:20:37 [build] Building server entrypoints...
+Using secrets defined in .dev.vars
+19:20:37 [vite] ✓ built in 78ms
+Using secrets defined in .dev.vars
+19:20:38 [vite] ✓ built in 647ms
+19:20:38 [vite] ✓ built in 26ms
+19:20:38 [build] Rearranging server assets...
+19:20:38 [build] ✓ Completed in 794ms.
+19:20:38 [@astrojs/cloudflare] Injected immutable Cache-Control for /_astro/* into _headers.
+19:20:38 [build] Server built in 889ms
+19:20:38 [build] Complete!
+check-built-css: ok — active "default" present (7 sentinels), 2 inactive themes excluded, Admin isolated, across 3 stylesheets.
+
+> minshop@0.1.0 test:integration
+> node --experimental-strip-types test/integration/kgame-return-disposal.mjs && node --experimental-strip-types test/integration/kgame-stock-outbound.mjs && node --experimental-strip-types test/integration/kgame-staff-password.mjs && node --experimental-strip-types test/integration/kgame-staff-http.mjs && node --experimental-strip-types test/integration/kgame-staff.mjs && node --experimental-strip-types test/integration/kgame-pending-actions.mjs && node --experimental-strip-types test/integration/kgame-return-inspection.mjs && node --experimental-strip-types test/integration/kgame-customer-returns.mjs && node --experimental-strip-types test/integration/kgame-order-refunds.mjs && node --experimental-strip-types test/integration/kgame-financial.mjs && node --experimental-strip-types test/integration/kgame-pos.mjs && node --experimental-strip-types test/integration/kgame-debt.mjs && node --experimental-strip-types test/integration/kgame-refunds.mjs && node --experimental-strip-types test/integration/kgame-purchase-completion.mjs && node --experimental-strip-types test/integration/kgame-purchase-returns.mjs && node --experimental-strip-types test/integration/business-audit.mjs && node --experimental-strip-types test/integration/reservations.mjs && node --experimental-strip-types test/integration/refunds.mjs && node --experimental-strip-types test/integration/media.mjs && node --experimental-strip-types test/integration/menus.mjs && node --experimental-strip-types test/integration/guest-access.mjs && node --experimental-strip-types test/integration/shipping.mjs && bash test/integration/d1-integration.sh
+
+✓ RD01: partial/full disposal clears only held defective queue, preserves all money/stock/cost/report history and replays once
+✓ RD02: disposed original serial cannot be sold; no duplicate inventory deduction
+✓ RD03: pending/unconfirmed/invalid/excess requests and wrong serial custody fail without writes
+✓ RD04: concurrent partial disposals cannot exceed held goods; simultaneous replay writes once; final failure rolls back serial, counters and receipt
+✓ RD07: mixed restock, rejected, disposed and remaining inspection quantities stay independent
+✓ RD05: corrupted disposal counters cannot bypass source history
+✓ O01: outbound rejects invalid quantities and insufficient stock; retries are idempotent, concurrent writes cannot oversell, journal failure rolls back stock
+✓ W01: initial session restricted; invalid input changes nothing; personal password revokes every old session and old credential
+✓ W02: role-only edit preserves personal-password state; owner password reset requires replacement again
+✓ W03: wrong current passwords are rate-limited; valid replacement succeeds after lock expires
+✓ W04: simultaneous changes allow one success; replay on a revoked session cannot change credentials
+✓ W05: audit failure rolls back password, required-change flag and session deletion; disabled account cannot change password
+✓ H05: first login forces personal password; direct sales API blocked until change; body account ID and role cannot redirect credential update
+✓ H01: production-mode anonymous gate, owner account management and individual staff login work
+Staff HTTP check failed: /api/admin/inventory/outbound
+
+500 !== 403
+
+mage-collection_DmfQN7fb.mjs               │ esm  │ 2.03 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/status_DqGoOppg.mjs                                │ esm  │ 3.43 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/stock_B0_8SaxH.mjs                                 │ esm  │ 0.66 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/storage_bcAK5gQo.mjs                               │ esm  │ 1.09 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/store_D0DBAnMy.mjs                                 │ esm  │ 3.26 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/suppliers_CF6CNX6T.mjs                             │ esm  │ 5.94 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/sync_CPioJNTV.mjs                                  │ esm  │ 3.72 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/tags_BeHtyuhS.mjs                                  │ esm  │ 1.68 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/test_BL6Gylc2.mjs                                  │ esm  │ 1.78 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/token_B-ugSq3J.mjs                                 │ esm  │ 2.24 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/url_B6URUndY.mjs                                   │ esm  │ 0.60 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/usage_70XKcL5u.mjs                                 │ esm  │ 4.27 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/variants__uU0YjsJ.mjs                              │ esm  │ 9.79 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/verify_Ccl3EUfL.mjs                                │ esm  │ 1.48 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/webhook_BKhpWn1W.mjs                               │ esm  │ 1.17 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ chunks/weight_Dv11WhPc.mjs                                │ esm  │ 5.11 KiB    │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ virtual_astro_middleware.mjs                              │ esm  │ 14.39 KiB   │
+├───────────────────────────────────────────────────────────┼──────┼─────────────┤
+│ Total (250 modules)                                       │      │ 5416.67 KiB │
+└───────────────────────────────────────────────────────────┴──────┴─────────────┘
+⎔ Starting local server...
+▲ [WARNING] Scheduled Workers are not automatically triggered during local development.
+
+  To manually trigger a scheduled event, run:
+    curl "http://127.0.0.1:8794/cdn-cgi/local/scheduled"
+  For more details, see https://developers.cloudflare.com/workers/configuration/cron-triggers/#test-cron-triggers-locally
+
+
+Wrangler detected this dev session is running in an AI agent.
+The Local Explorer API is available at http://127.0.0.1:8794/cdn-cgi/local/explorer/api
+Useful routes:
+  GET http://127.0.0.1:8794/cdn-cgi/local/explorer/api/local/workers - local Workers and bindings
+  GET http://127.0.0.1:8794/cdn-cgi/local/explorer/api/storage/kv/namespaces - KV namespaces
+  GET http://127.0.0.1:8794/cdn-cgi/local/explorer/api/d1/database - D1 databases
+  GET http://127.0.0.1:8794/cdn-cgi/local/explorer/api/r2/buckets - R2 buckets
+  GET http://127.0.0.1:8794/cdn-cgi/local/explorer/api/workers/durable_objects/namespaces - Durable Object namespaces
+  GET http://127.0.0.1:8794/cdn-cgi/local/explorer/api/workflows - Workflows
+  POST http://127.0.0.1:8794/cdn-cgi/local/explorer/api/local/observability/query - run a read-only SQL query (SELECT/WITH only) over captured request traces and console logs. Tables: spans, logs (read attributes via json(attributes)). Example:
+    curl -X POST http://127.0.0.1:8794/cdn-cgi/local/explorer/api/local/observability/query -H 'Content-Type: application/json' -d '{"sql":"SELECT service, name, outcome, duration_ms FROM spans WHERE parent_id IS NULL LIMIT 20"}'
+If the routes above don't cover what you need, fetch the full OpenAPI schema (large - use only as a last resort):
+  GET http://127.0.0.1:8794/cdn-cgi/local/explorer/api - OpenAPI schema
+[wrangler:info] ✨ Parsed 1 valid header rule.
+[wrangler:info] Ready on http://127.0.0.1:8794
+[wrangler:info] GET /admin/staff 303 See Other (7ms)
+[wrangler:info] POST /api/admin/orders 401 Unauthorized (2ms)
+[wrangler:info] POST /api/admin/staff 303 See Other (12ms)
+[wrangler:info] POST /api/admin/staff 303 See Other (11ms)
+[wrangler:info] GET /admin/staff 200 OK (6ms)
+[wrangler:info] POST /admin/login 303 See Other (11ms)
+[wrangler:info] GET /admin/orders 303 See Other (2ms)
+[wrangler:info] POST /api/admin/orders 403 Forbidden (2ms)
+[wrangler:info] GET /admin/change-password 200 OK (3ms)
+[wrangler:info] POST /api/admin/staff-password 303 See Other (17ms)
+[wrangler:info] POST /api/admin/orders 401 Unauthorized (1ms)
+[wrangler:info] POST /admin/login 303 See Other (10ms)
+[wrangler:info] POST /admin/login 303 See Other (9ms)
+[wrangler:info] GET /admin/orders 303 See Other (2ms)
+[wrangler:info] POST /api/admin/orders 403 Forbidden (1ms)
+[wrangler:info] GET /admin/change-password 200 OK (2ms)
+[wrangler:info] POST /api/admin/staff-password 303 See Other (18ms)
+[wrangler:info] POST /api/admin/orders 401 Unauthorized (2ms)
+[wrangler:info] POST /admin/login 303 See Other (9ms)
+[wrangler:info] GET /admin/orders 200 OK (3ms)
+[wrangler:info] GET /admin/sale 403 Forbidden (2ms)
+[wrangler:info] GET /admin/sale 200 OK (7ms)
+[wrangler:info] GET /admin/staff 403 Forbidden (3ms)
+[wrangler:info] GET /admin/settings 403 Forbidden (4ms)
+[wrangler:info] GET /admin/setup 403 Forbidden (2ms)
+[wrangler:info] GET /admin/customers 403 Forbidden (2ms)
+[wrangler:info] GET /admin/reports/financial 403 Forbidden (2ms)
+[wrangler:info] GET /admin/purchases 403 Forbidden (1ms)
+[wrangler:info] GET /admin/orders/1.legacy 403 Forbidden (2ms)
+[wrangler:info] POST /api/admin/staff 403 Forbidden (2ms)
+[wrangler:info] POST /api/admin/order-refunds 403 Forbidden (2ms)
+[wrangler:info] POST /api/admin/purchase-refunds 403 Forbidden (1ms)
+[wrangler:info] POST /api/admin/customer-returns 403 Forbidden (2ms)
+[wrangler:info] POST /api/admin/return-inspections 403 Forbidden (2ms)
+[wrangler:info] POST /api/admin/return-disposals 403 Forbidden (1ms)
+[wrangler:info] POST /api/admin/inventory/outbound 403 Forbidden (1ms)
+[wrangler:info] POST /api/admin/partners/pay-debt 403 Forbidden (1ms)
+[wrangler:info] POST /api/admin/orders/1 403 Forbidden (2ms)
+[wrangler:info] POST /api/admin/orders 403 Forbidden (2ms)
+[wrangler:info] POST /api/admin/orders 403 Forbidden (1ms)
+[wrangler:info] GET /admin/staff 403 Forbidden (2ms)
+[wrangler:info] GET /admin/settings 403 Forbidden (2ms)
+[wrangler:info] GET /admin/setup 403 Forbidden (2ms)
+[wrangler:info] GET /admin/customers 403 Forbidden (1ms)
+[wrangler:info] GET /admin/reports/financial 403 Forbidden (2ms)
+[wrangler:info] GET /admin/purchases 403 Forbidden (2ms)
+[wrangler:info] GET /admin/orders/1.legacy 403 Forbidden (2ms)
+[wrangler:info] POST /api/admin/staff 403 Forbidden (1ms)
+[wrangler:info] POST /api/admin/order-refunds 403 Forbidden (2ms)
+[wrangler:info] POST /api/admin/purchase-refunds 403 Forbidden (2ms)
+[wrangler:info] POST /api/admin/customer-returns 403 Forbidden (2ms)
+[wrangler:info] POST /api/admin/return-inspections 403 Forbidden (2ms)
+[wrangler:info] POST /api/admin/return-disposals 403 Forbidden (2ms)
+
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: /api/admin/inventory/outbound
+
+500 !== 403
+
+    at file://<HANDOFF_WORKSPACE>/outputs/KGAME_LINUX_HANDOVER_2026-09-29/project/test/integration/kgame-staff-http.mjs:61:283
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 500,
+  expected: 403,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.23.2

@@ -1,0 +1,274 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import { getBuybacksList, getBuybackKpi } from '../../../features/kgame/db';
+
+export const prerender = false;
+
+const search = Astro.url.searchParams.get('q') || '';
+const status = Astro.url.searchParams.get('status') || 'ALL';
+
+const buybacks = await getBuybacksList(env.DB, {
+  search: search || undefined,
+  status: status || undefined,
+});
+
+const kpi = await getBuybackKpi(env.DB);
+
+const formatNumber = (val: number) => {
+  if (!val || isNaN(val)) return '0';
+  return new Intl.NumberFormat('en-US').format(val);
+};
+const formatVND = formatNumber;
+
+const formatDate = (iso: string) => {
+  if (!iso) return '-';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
+  } catch {
+    return iso;
+  }
+};
+
+const success = Astro.url.searchParams.get('success');
+const error = Astro.url.searchParams.get('error');
+---
+
+<AdminLayout title="Thu Mua Máy Cũ & Linh Kiện" active="buybacks">
+  <!-- HEADER & ACTION -->
+  <div class="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold text-gray-900">Thu Mua Máy Cũ &amp; Linh Kiện (Buyback)</h1>
+      <p class="mt-1 text-sm text-gray-500">
+        Thu mua lại máy bắn cá, bo mạch, phụ kiện cũ từ khách hàng, định giá, tự động nhập kho QSD &amp; xuất chi Sổ Quỹ.
+      </p>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <a
+        href="/admin/buybacks/new"
+        class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-white font-semibold text-sm shadow hover:bg-blue-700 transition"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        Lập Phiếu Thu Mua Mới
+      </a>
+    </div>
+  </div>
+
+  {success && (
+    <div class="mb-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 flex items-center gap-2">
+      <svg class="w-5 h-5 flex-shrink-0 text-emerald-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+      <span>Đã tạo thành công phiếu thu mua mới và ghi nhận chi tiền vào Sổ Quỹ!</span>
+    </div>
+  )}
+
+  {error && (
+    <div class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex items-center gap-2">
+      <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
+      <span>{error}</span>
+    </div>
+  )}
+
+  <!-- THẺ KPI TỔNG QUAN -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <div class="bg-white rounded-xl border border-line p-4 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-medium text-gray-500">Tổng phiếu thu mua</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-2xl font-semibold text-gray-900 tabular-nums">{kpi.total_buybacks}</span>
+        <span class="text-xs text-gray-500">phiếu</span>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl border border-line p-4 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-medium text-gray-500">Tổng tiền đã chi thu mua</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-red-50 text-red-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-2xl font-semibold text-red-600 tabular-nums">{formatVND(kpi.total_spent_cents)}</span>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl border border-line p-4 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-medium text-gray-500">Tổng linh kiện/máy thu về</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-2xl font-semibold text-emerald-700 tabular-nums">{kpi.total_items_count}</span>
+        <span class="text-xs text-emerald-600 font-medium">món</span>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl border border-line p-4 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-medium text-gray-500">Phiếu hoàn tất</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-50 text-purple-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-2xl font-semibold text-purple-700 tabular-nums">{kpi.completed_count}</span>
+        <span class="text-xs text-purple-600 font-medium">đã nhập kho QSD</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- BỘ LỌC & TÌM KIẾM -->
+  <div class="bg-white rounded-xl border border-line p-4 mb-6 shadow-sm">
+    <form method="get" class="flex flex-col md:flex-row gap-3 text-[13.5px]">
+      <div class="relative flex-1">
+        <input
+          type="text"
+          name="q"
+          value={search}
+          placeholder="Tìm theo mã phiếu TMxxxx, tên khách hàng, số điện thoại, ghi chú..."
+          class="w-full pl-10 pr-4 py-2 text-[13.5px] border border-line rounded-lg focus:outline-none focus:border-brand"
+        />
+        <svg class="w-4 h-4 text-gray-400 absolute left-3 top-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+      </div>
+
+      <div class="w-full md:w-48">
+        <select
+          name="status"
+          class="w-full py-2 px-3 text-[13.5px] border border-line rounded-lg focus:outline-none focus:border-brand bg-white"
+        >
+          <option value="ALL" selected={status === 'ALL'}>Tất cả trạng thái</option>
+          <option value="COMPLETED" selected={status === 'COMPLETED'}>Đã hoàn tất</option>
+          <option value="DRAFT" selected={status === 'DRAFT'}>Phiếu tạm</option>
+        </select>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button
+          type="submit"
+          class="px-4 py-2 bg-gray-900 text-white rounded-lg text-[13.5px] font-medium hover:bg-black transition"
+        >
+          Lọc
+        </button>
+        {(search || status !== 'ALL') && (
+          <a
+            href="/admin/buybacks"
+            class="px-3 py-2 border border-line rounded-lg text-[13.5px] text-gray-600 hover:bg-gray-50 transition"
+          >
+            Đặt lại
+          </a>
+        )}
+      </div>
+    </form>
+  </div>
+
+  <!-- BẢNG DANH SÁCH PHIẾU THU MUA -->
+  <div class="bg-white rounded-xl border border-line shadow-sm overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-[14.5px] text-gray-700">
+        <thead class="bg-[#f8f9fa] text-[14px] font-semibold text-gray-700 border-b border-line select-none">
+          <tr>
+            <th class="px-4 py-3">Mã phiếu</th>
+            <th class="px-4 py-3">Ngày thu mua</th>
+            <th class="px-4 py-3">Khách hàng (Người bán)</th>
+            <th class="px-4 py-3 text-center">Số món</th>
+            <th class="px-4 py-3 text-right">Tổng tiền chi mua</th>
+            <th class="px-4 py-3">Thanh toán &amp; Sổ Quỹ</th>
+            <th class="px-4 py-3 text-center">Trạng thái</th>
+            <th class="px-4 py-3 text-right">Thao tác</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-line">
+          {buybacks.length === 0 ? (
+            <tr>
+              <td colspan="8" class="text-center py-12 text-gray-400">
+                <svg class="w-12 h-12 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/></svg>
+                <p class="font-medium text-gray-600">Chưa có phiếu thu mua nào</p>
+                <p class="text-xs mt-1 text-gray-400">Tạo phiếu mới để thu mua máy cũ hoặc linh kiện từ khách hàng</p>
+                <a
+                  href="/admin/buybacks/new"
+                  class="inline-flex items-center gap-1.5 mt-4 px-4 py-2 bg-brand text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition"
+                >
+                  + Lập Phiếu Thu Mua Mới
+                </a>
+              </td>
+            </tr>
+          ) : (
+            buybacks.map((b) => (
+              <tr class="hover:bg-blue-50/40 transition">
+                <td class="px-4 py-3 text-[14px]">
+                  <a href={`/admin/buybacks/${b.id}`} class="text-blue-600 font-normal hover:underline flex items-center gap-1">
+                    {b.buyback_code}
+                  </a>
+                </td>
+                <td class="px-4 py-3 text-[13px] text-gray-500 whitespace-nowrap">
+                  {formatDate(b.created_at)}
+                </td>
+                <td class="px-4 py-3">
+                  <div class="font-normal text-gray-900 text-[14.5px]">{b.customer_name || 'Khách thanh lý'}</div>
+                  {b.customer_phone && (
+                    <div class="text-[12px] text-gray-400">{b.customer_phone}</div>
+                  )}
+                </td>
+                <td class="px-4 py-3 text-center">
+                  <span class="inline-flex items-center px-2 py-0.5 rounded text-[12px] tabular-nums font-normal bg-gray-100 text-gray-700">
+                    {b.total_quantity} món
+                  </span>
+                </td>
+                <td class="px-4 py-3 text-right font-normal text-red-600 whitespace-nowrap tabular-nums">
+                  {formatVND(b.total_amount_cents)}
+                </td>
+                <td class="px-4 py-3 text-[13px]">
+                  <div class="flex items-center gap-1.5">
+                    <span class={`inline-block w-2 h-2 rounded-full ${b.payment_method === 'BANK' ? 'bg-blue-500' : 'bg-emerald-500'}`}></span>
+                    <span class="font-normal text-gray-700">
+                      {b.payment_method === 'BANK' ? 'Chuyển khoản' : 'Tiền mặt'}
+                    </span>
+                  </div>
+                  {b.cash_transaction_code && (
+                    <a
+                      href={`/admin/cash?q=${b.cash_transaction_code}`}
+                      class="text-[12px] text-blue-600 hover:underline"
+                      title="Xem Phiếu Chi trong Sổ Quỹ"
+                    >
+                      {b.cash_transaction_code}
+                    </a>
+                  )}
+                </td>
+                <td class="px-4 py-3 text-center">
+                  <span class={`inline-flex items-center px-2.5 py-0.5 rounded text-[12px] font-medium ${b.status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-700'}`}>
+                    {b.status === 'COMPLETED' ? 'Đã hoàn tất' : 'Phiếu tạm'}
+                  </span>
+                </td>
+                <td class="px-4 py-3 text-right whitespace-nowrap text-[13.5px]">
+                  <div class="flex items-center justify-end gap-2">
+                    <a
+                      href={`/admin/buybacks/${b.id}/print`}
+                      target="_blank"
+                      class="p-1.5 rounded-lg border border-line text-gray-600 hover:text-brand hover:border-brand transition"
+                      title="In Biên bản bàn giao thu mua"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+                    </a>
+                    <a
+                      href={`/admin/buybacks/${b.id}`}
+                      class="px-2.5 py-1.5 rounded-lg bg-gray-100 text-gray-700 font-medium text-xs hover:bg-gray-200 transition"
+                    >
+                      Chi tiết
+                    </a>
+                  </div>
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</AdminLayout>

@@ -1,0 +1,557 @@
+---
+import { hasPermission,withoutCosts } from '../../../../features/auth/permissions';
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../../layouts/AdminLayout.astro';
+
+export const prerender = false;
+
+// 1. Nhận diện loại nghiệp vụ từ URL
+const typeParam = Astro.url.searchParams.get('type') || '';
+const initialIsDisposal = typeParam === 'DISPOSAL';
+
+// 2. Lấy danh sách sản phẩm active kèm giá vốn
+const { results: rawProducts } = await env.DB
+  .prepare(`
+    SELECT id, name, product_code, has_serial, tracking_mode, unit_name, 
+           stock_new, stock_used, stock, cost_price_cents, cost_price_used_cents
+    FROM products
+    WHERE active = 1
+    ORDER BY name ASC
+  `)
+  .all<any>();
+
+const productTypes=(await env.DB.prepare('SELECT id,product_id,name FROM product_types ORDER BY id').all<any>()).results;
+
+// 3. Lấy danh sách mã bộ đang còn IN_STOCK
+const { results: inStockUnits } = await env.DB
+  .prepare(`
+    SELECT pu.id, pu.program_code, pu.condition, pu.product_type_id, pt.product_id
+    FROM product_units pu
+    JOIN product_types pt ON pu.product_type_id = pt.id
+    WHERE pu.availability = 'IN_STOCK'
+    ORDER BY pu.program_code ASC
+  `)
+  .all<any>();
+
+const canViewCost=hasPermission(Astro.locals.adminPrincipal,'cost.view');
+const products=canViewCost?rawProducts:withoutCosts(rawProducts);
+const error = Astro.url.searchParams.get('error');
+---
+
+<AdminLayout 
+  title={initialIsDisposal ? "Lập phiếu Xuất hủy hàng hóa" : "Lập phiếu Xuất dùng nội bộ"} 
+  active="inventory"
+>
+  <div class="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <a
+        href="/admin/inventory"
+        class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-line bg-white text-gray-500 hover:text-gray-900 transition hover:bg-gray-50"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+      </a>
+      <div>
+        <h1 id="pageTitleHeading" class="text-2xl font-bold text-gray-900">
+          {initialIsDisposal ? "Lập Phiếu Xuất Hủy Hàng Hóa" : "Lập Phiếu Xuất Dùng Nội Bộ"}
+        </h1>
+        <p id="pageSubtitleDesc" class="mt-1 text-xs text-gray-500">
+          {initialIsDisposal 
+            ? "Xuất hủy linh kiện, thiết bị hư hỏng không thể sửa chữa hoặc hao hụt kho — Tự động trừ tồn kho và ghi nhật ký Sổ Kho." 
+            : "Xuất kho linh kiện thử máy ráp xưởng hoặc phục vụ kỹ thuật nội bộ — Tự động trừ tồn kho và ghi nhật ký Sổ Kho."}
+        </p>
+      </div>
+    </div>
+  </div>
+
+  {error && (
+    <div class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-xs font-semibold text-red-800 flex items-center gap-2">
+      <svg class="w-4 h-4 text-red-600 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
+      <span>{error}</span>
+    </div>
+  )}
+
+  <form id="outboundForm" method="POST" action="/api/admin/inventory/outbound" class="space-y-6">
+    <input type="hidden" name="payload" id="outboundPayloadInput" />
+
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <!-- CỘT TRÁI (8/12): CHỌN MẶT HÀNG VÀ BẢNG CHI TIẾT -->
+      <div class="lg:col-span-8 space-y-4">
+        <!-- TÌM KIẾM HÀNG HÓA -->
+        <div class="relative bg-white rounded-xl border border-line p-3 shadow-sm">
+          <div class="relative flex items-center">
+            <svg class="absolute left-3 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            <input
+              type="text"
+              id="searchProductInput"
+              placeholder="Tìm kiếm theo tên linh kiện, mã SKU để xuất..."
+              class="w-full pl-10 pr-4 py-2 text-sm border-none focus:outline-none focus:ring-0 text-gray-800"
+            />
+          </div>
+
+          <!-- KẾT QUẢ TÌM KIẾM DROPDOWN -->
+          <div
+            id="searchResultsBox"
+            class="absolute left-0 right-0 top-full mt-1 bg-white border border-line rounded-xl shadow-xl z-20 hidden max-h-72 overflow-y-auto divide-y divide-line"
+          >
+            <!-- Render bằng JS -->
+          </div>
+        </div>
+
+        <!-- BẢNG DANH SÁCH MẶT HÀNG XUẤT -->
+        <div class="bg-white rounded-xl border border-line shadow-sm overflow-hidden">
+          <div class="px-5 py-3 border-b border-line bg-gray-50/50 flex items-center justify-between">
+            <h2 class="text-xs font-bold text-gray-800 uppercase tracking-wider">Danh sách hàng hóa xuất kho</h2>
+            <span id="itemsCountBadge" class="text-xs text-gray-500">0 mặt hàng</span>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-[14px] text-gray-700">
+              <thead class="bg-[#f8f9fa] border-b border-line text-[13.5px] font-semibold text-gray-700 select-none">
+                <tr>
+                  <th class="px-3 py-3 w-10 text-center">Xóa</th>
+                  <th class="px-3 py-3 w-10 text-center">STT</th>
+                  <th class="px-4 py-3">Tên hàng hóa</th>
+                  <th class="px-3 py-3 w-28">Tình trạng</th>
+                  <th class="px-3 py-3 w-44">Serial / Phân loại</th>
+                  <th class="px-3 py-3 w-14 text-center">ĐVT</th>
+                  <th class="px-3 py-3 w-20 text-center">Số lượng</th>
+                  <th class="px-3 py-3 w-28 text-right">Giá vốn</th>
+                  <th class="px-3 py-3 w-28 text-right">Thành tiền</th>
+                  <th class="px-3 py-3">Ghi chú</th>
+                </tr>
+              </thead>
+              <tbody id="outboundTableBody" class="divide-y divide-line">
+                <!-- Render dòng bằng JS -->
+              </tbody>
+            </table>
+          </div>
+
+          <div id="emptyNotice" class="py-14 text-center text-gray-400">
+            <svg class="w-10 h-10 mx-auto mb-2 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+            <p class="font-medium text-xs text-gray-500">Chưa có hàng hóa nào được chọn</p>
+            <p class="text-[11px] text-gray-400 mt-0.5">Gõ tên linh kiện vào ô tìm kiếm ở trên để thêm vào danh sách xuất</p>
+          </div>
+
+          <!-- TỔNG KẾT BẢNG HÀNG XUẤT -->
+          <div id="tableSummaryBox" class="hidden px-5 py-3 border-t border-line bg-gray-50/80 flex items-center justify-between text-xs">
+            <span class="text-gray-500 font-medium">Tổng cộng:</span>
+            <div class="flex items-center gap-6">
+              <div>
+                <span class="text-gray-500">Tổng số lượng: </span>
+                <strong id="totalQtyVal" class="font-bold text-gray-900 tabular-nums">0</strong>
+              </div>
+              <div>
+                <span class="text-gray-500">Tổng giá trị xuất kho: </span>
+                <strong id="totalCostVal" class="font-bold text-blue-700 text-sm tabular-nums">{canViewCost?'0 đ':'—'}</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CỘT PHẢI (4/12): THÔNG TIN PHIẾU XUẤT KHO -->
+      <div class="lg:col-span-4 bg-white rounded-xl border border-line p-5 shadow-sm space-y-5 text-sm">
+        <h3 class="text-xs font-bold text-gray-800 uppercase tracking-wider border-b border-line pb-2">
+          Thông tin phiếu xuất
+        </h3>
+
+        <!-- LOẠI PHIẾU -->
+        <div>
+          <label class="block text-xs font-semibold text-gray-700 mb-2">Loại nghiệp vụ xuất kho <span class="text-red-500">*</span></label>
+          <div class="space-y-2">
+            <label class="flex items-start gap-3 p-3 rounded-xl border border-line bg-gray-50/50 cursor-pointer hover:bg-teal-50/50 hover:border-teal-300 transition">
+              <input 
+                type="radio" 
+                name="outbound_type" 
+                value="INTERNAL_USE" 
+                checked={!initialIsDisposal}
+                class="mt-0.5 text-teal-600 focus:ring-teal-500" 
+              />
+              <div>
+                <div class="font-bold text-gray-900 text-xs">Xuất dùng nội bộ</div>
+                <div class="text-[11px] text-gray-500 mt-0.5">Lấy linh kiện thử máy, ráp máy mẫu hoặc phục vụ kỹ thuật nội bộ xưởng.</div>
+              </div>
+            </label>
+
+            <label class="flex items-start gap-3 p-3 rounded-xl border border-line bg-gray-50/50 cursor-pointer hover:bg-rose-50/50 hover:border-rose-300 transition">
+              <input 
+                type="radio" 
+                name="outbound_type" 
+                value="DISPOSAL" 
+                checked={initialIsDisposal}
+                class="mt-0.5 text-rose-600 focus:ring-rose-500" 
+              />
+              <div>
+                <div class="font-bold text-gray-900 text-xs">Xuất hủy</div>
+                <div class="text-[11px] text-gray-500 mt-0.5">Hàng hóa hư hỏng không thể sửa chữa, chập cháy linh kiện hoặc hao hụt kho.</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- NGƯỜI THỰC HIỆN -->
+        <div>
+          <label class="block text-xs font-semibold text-gray-700 mb-1">Người xuất kho</label>
+          <input
+            type="text"
+            id="createdByInput"
+            value={Astro.locals.adminPrincipal?.name} readonly
+            class="w-full py-2 px-3 text-xs border border-line rounded-lg focus:outline-none focus:border-brand bg-white"
+          />
+        </div>
+
+        <!-- LÝ DO XUẤT -->
+        <div>
+          <label class="block text-xs font-semibold text-gray-700 mb-1">Lý do xuất kho <span class="text-red-500">*</span></label>
+          <textarea
+            id="reasonInput"
+            rows="3"
+            required
+            placeholder="Nhập lý do xuất kho (VD: Thử bàn phím máy mẫu, Bo mạch hỏng linh kiện không phục hồi...)"
+            class="w-full py-2 px-3 text-xs border border-line rounded-lg focus:outline-none focus:border-brand bg-white text-gray-800"
+          ></textarea>
+        </div>
+
+        <!-- TỔNG TIỀN XUẤT KHO TRÊN SIDEBAR -->
+        <div class="p-3.5 bg-blue-50/60 border border-blue-100 rounded-xl space-y-1">
+          <span class="text-[11.5px] text-gray-500 block">Tổng giá trị xuất kho (ước tính):</span>
+          <strong id="sidebarCostTotal" class="text-lg font-bold text-blue-700 tabular-nums block">{canViewCost?'0 đ':'—'}</strong>
+          <span class="text-[10px] text-gray-400 block">Ghi giảm tồn kho; chưa phải phiếu chi tiền.</span>
+        </div>
+
+        <!-- TÁC ĐỘNG SỔ KHO -->
+        <div class="text-xs bg-amber-50 text-amber-900 p-3 rounded-lg border border-amber-200 space-y-1">
+          <div class="font-bold">⚠️ Lưu ý Sổ Kho:</div>
+          <div>• Hàng xuất dùng hoặc xuất hủy sẽ trừ tồn kho thực tế ngay lập tức.</div>
+          <div>• Hàng quản lý theo Serial sẽ được đánh dấu trạng thái tương ứng để loại khỏi danh mục bán hàng.</div>
+        </div>
+
+        <!-- NÚT HOÀN THÀNH -->
+        <div class="pt-2 border-t border-line">
+          <button
+            type="submit"
+            id="submitOutboundBtn"
+            class="w-full py-3 rounded-xl bg-brand hover:bg-brand-hover text-white font-bold text-xs shadow transition flex items-center justify-center gap-2"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            Xác nhận Xuất kho
+          </button>
+        </div>
+      </div>
+    </div>
+  </form>
+
+  <script define:vars={{ products, inStockUnits, canViewCost, productTypes }}>
+    window.KGAME_OUTBOUND_CAN_COST=canViewCost;
+    window.KGAME_OUTBOUND_TYPES=productTypes;
+    window.KGAME_OUTBOUND_PRODUCTS = products || [];
+    window.KGAME_OUTBOUND_UNITS = inStockUnits || [];
+  </script>
+
+  <script>
+    const outboundRequestId=crypto.randomUUID();
+    const canViewCost=!!(window as any).KGAME_OUTBOUND_CAN_COST;
+    const productTypes=(window as any).KGAME_OUTBOUND_TYPES || [];
+    const allProducts = (window as any).KGAME_OUTBOUND_PRODUCTS || [];
+    const inStockUnits = (window as any).KGAME_OUTBOUND_UNITS || [];
+
+    const searchInput = document.getElementById('searchProductInput') as HTMLInputElement;
+    const searchResults = document.getElementById('searchResultsBox') as HTMLElement;
+    const tableBody = document.getElementById('outboundTableBody') as HTMLElement;
+    const emptyNotice = document.getElementById('emptyNotice') as HTMLElement;
+    const itemsCountBadge = document.getElementById('itemsCountBadge') as HTMLElement;
+    const tableSummaryBox = document.getElementById('tableSummaryBox') as HTMLElement;
+    const totalQtyVal = document.getElementById('totalQtyVal') as HTMLElement;
+    const totalCostVal = document.getElementById('totalCostVal') as HTMLElement;
+    const sidebarCostTotal = document.getElementById('sidebarCostTotal') as HTMLElement;
+
+    const pageTitleHeading = document.getElementById('pageTitleHeading') as HTMLElement;
+    const pageSubtitleDesc = document.getElementById('pageSubtitleDesc') as HTMLElement;
+
+    const outboundForm = document.getElementById('outboundForm') as HTMLFormElement;
+    const outboundPayloadInput = document.getElementById('outboundPayloadInput') as HTMLInputElement;
+    const reasonInput = document.getElementById('reasonInput') as HTMLTextAreaElement;
+    const createdByInput = document.getElementById('createdByInput') as HTMLInputElement;
+
+    let selectedItems: any[] = [];
+
+    const formatVND = (num: number) => {
+      if (!num || isNaN(num)) return '0';
+      return new Intl.NumberFormat('vi-VN').format(num);
+    };
+
+    // Chuyển đổi linh hoạt giao diện khi chọn radio
+    document.querySelectorAll('input[name="outbound_type"]').forEach((radio) => {
+      radio.addEventListener('change', (e) => {
+        const val = (e.target as HTMLInputElement).value;
+        if (val === 'DISPOSAL') {
+          if (pageTitleHeading) pageTitleHeading.textContent = 'Lập Phiếu Xuất Hủy Hàng Hóa';
+          if (pageSubtitleDesc) pageSubtitleDesc.textContent = 'Xuất hủy linh kiện, thiết bị hư hỏng không thể sửa chữa hoặc hao hụt kho — Tự động trừ tồn kho và ghi nhật ký Sổ Kho.';
+        } else {
+          if (pageTitleHeading) pageTitleHeading.textContent = 'Lập Phiếu Xuất Dùng Nội Bộ';
+          if (pageSubtitleDesc) pageSubtitleDesc.textContent = 'Xuất kho linh kiện thử máy ráp xưởng hoặc phục vụ kỹ thuật nội bộ — Tự động trừ tồn kho và ghi nhật ký Sổ Kho.';
+        }
+      });
+    });
+
+    // 1. Tìm kiếm sản phẩm
+    searchInput?.addEventListener('input', () => {
+      const q = searchInput.value.trim().toLowerCase();
+      if (!q) {
+        searchResults.classList.add('hidden');
+        return;
+      }
+
+      const matches = allProducts.filter((p: any) =>
+        (p.name && p.name.toLowerCase().includes(q)) ||
+        (p.product_code && p.product_code.toLowerCase().includes(q))
+      );
+
+      if (matches.length === 0) {
+        searchResults.innerHTML = '<div class="p-4 text-center text-xs text-gray-500">Không tìm thấy hàng hóa nào phù hợp.</div>';
+        searchResults.classList.remove('hidden');
+        return;
+      }
+
+      searchResults.innerHTML = matches.map((p: any) => `
+        <div class="search-item p-3 hover:bg-blue-50 cursor-pointer flex items-center justify-between text-xs transition" data-id="${p.id}">
+          <div>
+            <div class="font-bold text-gray-900">${p.name}</div>
+            <div class="text-[11px] text-gray-500 font-mono">${p.product_code || '--'} • ĐVT: ${p.unit_name || 'Cái'}</div>
+          </div>
+          <div class="text-right">
+            <div class="font-mono text-gray-800">Tồn mới: ${p.stock_new || 0} • Tồn cũ: ${p.stock_used || 0}</div>
+            <div class="text-[11px] text-gray-500">Giá vốn: ${canViewCost?formatVND(p.cost_price_cents || 0)+' đ':'—'}</div>
+          </div>
+        </div>
+      `).join('');
+
+      searchResults.classList.remove('hidden');
+
+      searchResults.querySelectorAll('.search-item').forEach((el) => {
+        el.addEventListener('click', () => {
+          const id = Number(el.getAttribute('data-id'));
+          const prod = allProducts.find((p: any) => p.id === id);
+          if (prod) {
+            addItem(prod);
+            searchResults.classList.add('hidden');
+            searchInput.value = '';
+          }
+        });
+      });
+    });
+
+    // Đóng dropdown khi bấm ngoài
+    document.addEventListener('click', (e) => {
+      if (!searchInput.contains(e.target as Node) && !searchResults.contains(e.target as Node)) {
+        searchResults.classList.add('hidden');
+      }
+    });
+
+    // 2. Thêm dòng hàng
+    function addItem(prod: any) {
+      const hasSerial = prod.has_serial === 1 || prod.tracking_mode === 'CODE';
+      const units = inStockUnits.filter((u: any) => u.product_id === prod.id);
+
+      selectedItems.push({
+        product_id: prod.id,
+        product_type_id: productTypes.filter((t:any)=>t.product_id===prod.id).length===1 ? productTypes.find((t:any)=>t.product_id===prod.id).id : null,
+        name: prod.name,
+        product_code: prod.product_code,
+        has_serial: hasSerial,
+        unit_name: prod.unit_name || 'Cái',
+        condition: 'NEW',
+        cost_price_cents: prod.cost_price_cents || 0,
+        cost_price_used_cents: prod.cost_price_used_cents || prod.cost_price_cents || 0,
+        product_unit_id: null,
+        availableUnits: units,
+        quantity: 1,
+        note: ''
+      });
+
+      renderTable();
+    }
+
+    // 3. Render bảng & Cập nhật tổng giá trị
+    function renderTable() {
+      if (selectedItems.length === 0) {
+        tableBody.innerHTML = '';
+        emptyNotice.classList.remove('hidden');
+        tableSummaryBox?.classList.add('hidden');
+        if (itemsCountBadge) itemsCountBadge.textContent = '0 mặt hàng';
+        if (sidebarCostTotal) sidebarCostTotal.textContent = canViewCost?'0 đ':'—';
+        return;
+      }
+
+      emptyNotice.classList.add('hidden');
+      tableSummaryBox?.classList.remove('hidden');
+      if (itemsCountBadge) itemsCountBadge.textContent = `${selectedItems.length} mặt hàng`;
+
+      let totalQty = 0;
+      let totalCost = 0;
+
+      tableBody.innerHTML = selectedItems.map((it, idx) => {
+        const unitCost = it.condition === 'QSD' ? it.cost_price_used_cents : it.cost_price_cents;
+        const lineTotal = unitCost * it.quantity;
+        totalQty += it.quantity;
+        totalCost += lineTotal;
+
+        return `
+          <tr class="hover:bg-blue-50/40 transition text-[13.5px]">
+            <td class="px-3 py-3 text-center">
+              <button type="button" class="text-gray-400 hover:text-red-600 transition" onclick="window.removeOutboundItem(${idx})">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+              </button>
+            </td>
+            <td class="px-3 py-3 text-center text-gray-400 tabular-nums font-normal">${idx + 1}</td>
+            <td class="px-4 py-3">
+              <div class="font-normal text-gray-900">${it.name}</div>
+              <div class="text-[11.5px] text-gray-400 font-mono">${it.product_code || '--'}</div>
+            </td>
+            <td class="px-3 py-3">
+              <select
+                class="py-1 px-1.5 text-xs border border-line rounded bg-white font-medium ${it.condition === 'NEW' ? 'text-emerald-700' : 'text-amber-700'}"
+                onchange="window.updateOutboundCondition(${idx}, this.value)"
+              >
+                <option value="NEW" ${it.condition === 'NEW' ? 'selected' : ''}>Mới</option>
+                <option value="QSD" ${it.condition === 'QSD' ? 'selected' : ''}>Cũ (QSD)</option>
+              </select>
+            </td>
+            <td class="px-3 py-3">
+              ${it.has_serial ? `
+                <select
+                  class="w-full py-1 px-2 text-xs border border-blue-300 rounded font-normal text-brand bg-blue-50/50"
+                  onchange="window.updateOutboundSerial(${idx}, this.value)"
+                  required
+                >
+                  <option value="">-- Chọn mã Serial --</option>
+                  ${it.availableUnits.map((u: any) => `
+                    <option value="${u.id}" ${it.product_unit_id == u.id ? 'selected' : ''}>
+                      ${u.program_code} (${u.condition === 'NEW' ? 'Mới' : 'Cũ'})
+                    </option>
+                  `).join('')}
+                </select>
+              ` : `
+                <select class="border rounded p-1" onchange="window.updateOutboundType(${idx},this.value)"><option value="">Chọn phân loại</option>${productTypes.filter((t:any)=>t.product_id===it.product_id).map((t:any)=>`<option value="${t.id}" ${it.product_type_id===t.id?'selected':''}>${String(t.name).replace(/[&<>"']/g,(c:string)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c] || c))}</option>`).join('')}</select>
+              `}
+            </td>
+            <td class="px-3 py-3 text-center text-gray-600 text-xs">${it.unit_name}</td>
+            <td class="px-3 py-3 text-center">
+              <input
+                type="number"
+                min="1"
+                value="${it.quantity}"
+                ${it.has_serial ? 'disabled' : ''}
+                class="w-16 py-1 px-1 text-center tabular-nums text-xs border border-line rounded ${it.has_serial ? 'bg-gray-100' : 'bg-white'}"
+                oninput="window.updateOutboundQty(${idx}, this.value)"
+              />
+            </td>
+            <td class="px-3 py-3 text-right text-xs tabular-nums text-gray-600">
+              ${canViewCost?formatVND(unitCost)+ ' đ':'—'}
+            </td>
+            <td class="px-3 py-3 text-right text-xs tabular-nums font-semibold text-gray-900">
+              ${canViewCost?formatVND(lineTotal)+ ' đ':'—'}
+            </td>
+            <td class="px-3 py-3">
+              <input
+                type="text"
+                placeholder="Ghi chú thêm..."
+                value="${it.note || ''}"
+                class="w-full py-1 px-2 text-xs border border-line rounded bg-white"
+                oninput="window.updateOutboundNote(${idx}, this.value)"
+              />
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      if (totalQtyVal) totalQtyVal.textContent = String(totalQty);
+      if (totalCostVal) totalCostVal.textContent = canViewCost?`${formatVND(totalCost)} đ`:'—';
+      if (sidebarCostTotal) sidebarCostTotal.textContent = canViewCost?`${formatVND(totalCost)} đ`:'—';
+    }
+
+    // Window helpers
+    (window as any).removeOutboundItem = function (idx: number) {
+      selectedItems.splice(idx, 1);
+      renderTable();
+    };
+
+    (window as any).updateOutboundCondition = function (idx: number, val: string) {
+      if (selectedItems[idx]) {
+        selectedItems[idx].condition = val;
+        renderTable();
+      }
+    };
+
+    (window as any).updateOutboundType = function(idx:number,val:string){selectedItems[idx].product_type_id=val?Number(val):null;};
+    (window as any).updateOutboundSerial = function (idx: number, val: string) {
+      if (selectedItems[idx]) {
+        const unit=inStockUnits.find((u:any)=>u.id===Number(val));
+        selectedItems[idx].product_unit_id=unit?.id??null;
+        selectedItems[idx].product_type_id=unit?.product_type_id??null;
+        if(unit)selectedItems[idx].condition=unit.condition;
+        renderTable();
+      }
+    };
+
+    (window as any).updateOutboundQty = function (idx: number, val: string) {
+      if (selectedItems[idx]) {
+        selectedItems[idx].quantity = Math.max(1, Number(val) || 1);
+        renderTable();
+      }
+    };
+
+    (window as any).updateOutboundNote = function (idx: number, val: string) {
+      if (selectedItems[idx]) selectedItems[idx].note = val.trim();
+    };
+
+    // 4. Form Submit
+    outboundForm?.addEventListener('submit', (e) => {
+      if (selectedItems.length === 0) {
+        e.preventDefault();
+        alert('Vui lòng thêm ít nhất 1 mặt hàng cần xuất kho');
+        searchInput?.focus();
+        return;
+      }
+
+      const reason = reasonInput?.value.trim();
+      if (!reason) {
+        e.preventDefault();
+        alert('Vui lòng nhập lý do xuất kho');
+        reasonInput?.focus();
+        return;
+      }
+
+      // Kiểm tra hàng Serial đã chọn mã chưa
+      for (let i = 0; i < selectedItems.length; i++) {
+        const it = selectedItems[i];
+        if (it.has_serial && !it.product_unit_id) {
+          e.preventDefault();
+          alert(`Mặt hàng "${it.name}" quản lý theo Serial. Vui lòng chọn mã Serial cụ thể cần xuất!`);
+          return;
+        }
+      }
+
+      const outboundType = (document.querySelector('input[name="outbound_type"]:checked') as HTMLInputElement)?.value || 'INTERNAL_USE';
+
+      const payload = {
+        request_id: outboundRequestId,
+        outbound_type: outboundType,
+        reason,
+        created_by: createdByInput?.value.trim() || 'Kỹ thuật Kgame',
+        items: selectedItems.map(it => ({
+          product_id: it.product_id,
+          product_type_id: it.product_type_id,
+          product_unit_id: it.has_serial ? it.product_unit_id : null,
+          condition: it.condition,
+          quantity: it.quantity,
+          note: it.note
+        }))
+      };
+
+      if (outboundPayloadInput) {
+        outboundPayloadInput.value = JSON.stringify(payload);
+      }
+    });
+  </script>
+</AdminLayout>

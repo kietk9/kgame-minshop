@@ -1,0 +1,412 @@
+---
+// Component Modal Thanh Toán / Thu Nợ Gắn Liền Với Chứng Từ Gốc (Chuẩn KiotViet)
+interface Props {
+  modalId?: string;
+}
+
+const { modalId = 'payDebtModal' } = Astro.props;
+---
+
+<div id={modalId} class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 hidden">
+  <div class="w-full max-w-2xl bg-white rounded-2xl border border-line shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+    <!-- HEADER -->
+    <div class="px-5 py-3.5 bg-brand text-white flex items-center justify-between">
+      <h3 id={`${modalId}Title`} class="font-bold text-base flex items-center gap-2">
+        <span>Thanh toán công nợ</span>
+      </h3>
+      <button type="button" class="btn-close-debt-modal text-white/80 hover:text-white transition p-1 cursor-pointer">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <!-- BODY -->
+    <form id={`${modalId}Form`} class="p-5 space-y-4 overflow-y-auto flex-1 text-xs">
+      <input type="hidden" id={`${modalId}PartnerId`} value="" />
+      <input type="hidden" id={`${modalId}TargetType`} value="PURCHASE" />
+
+      <!-- THÔNG TIN ĐỐI TÁC -->
+      <div class="p-3 bg-blue-50/50 rounded-xl border border-blue-200 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <span class="text-gray-500">Đối tác:</span>
+          <strong id={`${modalId}PartnerName`} class="text-gray-900 ml-1 text-sm">--</strong>
+          <span id={`${modalId}PartnerPhone`} class="text-gray-500 ml-1"></span>
+        </div>
+        <div>
+          <span class="text-gray-500">Tổng nợ hiện tại:</span>
+          <strong id={`${modalId}PartnerTotalDebt`} class="text-red-700 ml-1 font-bold text-sm">0đ</strong>
+        </div>
+      </div>
+
+      <!-- BẢNG DANH SÁCH CHỨNG TỪ NỢ GỐC -->
+      <div>
+        <div class="flex items-center justify-between mb-1.5">
+          <label class="font-bold text-gray-800 text-xs flex items-center gap-1.5">
+            <span>📋 Chọn chứng từ cần thanh toán:</span>
+          </label>
+          <span class="text-[11px] text-gray-500">Tích chọn để phân bổ tiền trả cho từng phiếu</span>
+        </div>
+
+        <div class="overflow-x-auto rounded-xl border border-line">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-[#f8f9fa] border-b border-line font-semibold text-gray-700 select-none">
+              <tr>
+                <th class="p-2.5 w-10 text-center">
+                  <input type="checkbox" id={`${modalId}CheckAll`} class="rounded text-brand focus:ring-brand" checked />
+                </th>
+                <th class="p-2.5">Mã phiếu / đơn</th>
+                <th class="p-2.5">Loại chứng từ</th>
+                <th class="p-2.5">Ngày lập</th>
+                <th class="p-2.5 text-right">Tổng tiền</th>
+                <th class="p-2.5 text-right">Đã thanh toán</th>
+                <th class="p-2.5 text-right">Còn nợ</th>
+                <th class="p-2.5 text-right w-32">Tiền trả đợt này</th>
+              </tr>
+            </thead>
+            <tbody id={`${modalId}DocsBody`} class="divide-y divide-line">
+              <!-- Rendered via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- TỔNG TIỀN THANH TOÁN & HÌNH THỨC -->
+      <div class="p-4 bg-gray-50 rounded-xl border border-line space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-gray-800 text-sm">Tổng tiền thanh toán đợt này:</span>
+          <span id={`${modalId}SumDisplay`} class="text-lg font-extrabold text-brand tabular-nums">0đ</span>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-line">
+          <div>
+            <label class="block font-semibold text-gray-700 mb-1">Phương thức thanh toán</label>
+            <div class="flex items-center gap-4 text-xs font-medium">
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name={`${modalId}Method`} value="CASH" checked class="text-brand focus:ring-brand" />
+                <span>Tiền mặt</span>
+              </label>
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name={`${modalId}Method`} value="BANK" class="text-brand focus:ring-brand" />
+                <span>Chuyển khoản</span>
+              </label>
+            </div>
+          </div>
+
+          <div id={`${modalId}BankWrapper`} class="hidden">
+            <label class="block font-semibold text-gray-700 mb-1">Tài khoản ngân hàng</label>
+            <select id={`${modalId}BankName`} class="w-full p-2 border border-line rounded-lg bg-white text-xs">
+              <option value="Vietcombank">Vietcombank (TK Chính Cửa Hàng)</option>
+              <option value="MB Bank">MB Bank (Tài khoản POS)</option>
+              <option value="Techcombank">Techcombank</option>
+              <option value="BIDV">BIDV</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-semibold text-gray-700 mb-1">Ghi chú thanh toán</label>
+          <input
+            type="text"
+            id={`${modalId}Note`}
+            placeholder="VD: Thanh toán công nợ đợt 1..."
+            class="w-full p-2 border border-line rounded-lg bg-white text-xs"
+          />
+        </div>
+      </div>
+
+      <!-- FOOTER NÚT THAO TÁC -->
+      <div class="flex items-center justify-end gap-2 pt-2 border-t border-line">
+        <button
+          type="button"
+          class="btn-close-debt-modal px-4 py-2 rounded-lg border border-line text-gray-700 font-semibold hover:bg-gray-100 transition cursor-pointer"
+        >
+          Hủy bỏ
+        </button>
+        <button
+          type="submit"
+          id={`${modalId}SubmitBtn`}
+          class="px-5 py-2 rounded-lg bg-brand text-white font-bold hover:bg-blue-700 transition cursor-pointer shadow-sm flex items-center gap-1.5"
+        >
+          <span>✓ Xác nhận thanh toán</span>
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script is:inline define:vars={{ modalId }}>
+  function setupPayDebtModal() {
+    const modal = document.getElementById(modalId);
+    if (!modal || modal.dataset.paymentReady === '1') return;
+    modal.dataset.paymentReady = '1';
+    const requestIds = new Map();
+    const parseMoney = (value) => {
+      const str = String(value).trim();
+      if (!str) return 0;
+      if (!/^(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+|[0-9]{1,3}(?:\.[0-9]{3})+)$/.test(str)) return NaN;
+      const amount = Number(str.replace(/[,.]/g, ''));
+      return Number.isSafeInteger(amount) ? amount : NaN;
+    };
+    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+
+    const form = document.getElementById(modalId + 'Form');
+    const partnerIdInput = document.getElementById(modalId + 'PartnerId');
+    const targetTypeInput = document.getElementById(modalId + 'TargetType');
+    const titleEl = document.getElementById(modalId + 'Title');
+    const partnerNameEl = document.getElementById(modalId + 'PartnerName');
+    const partnerPhoneEl = document.getElementById(modalId + 'PartnerPhone');
+    const partnerDebtEl = document.getElementById(modalId + 'PartnerTotalDebt');
+    const docsBody = document.getElementById(modalId + 'DocsBody');
+    const sumDisplay = document.getElementById(modalId + 'SumDisplay');
+    const bankWrapper = document.getElementById(modalId + 'BankWrapper');
+    const bankNameSelect = document.getElementById(modalId + 'BankName');
+    const noteInput = document.getElementById(modalId + 'Note');
+    const submitBtn = document.getElementById(modalId + 'SubmitBtn');
+    const checkAll = document.getElementById(modalId + 'CheckAll');
+
+    function formatVND(val) {
+      if (!val || isNaN(val)) return '0đ';
+      return new Intl.NumberFormat('en-US').format(val) + 'đ';
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '--';
+      try {
+        const d = new Date(iso);
+        return d.toLocaleDateString('vi-VN');
+      } catch {
+        return iso;
+      }
+    }
+
+    function closeModal() {
+      modal.classList.add('hidden');
+    }
+
+    modal.querySelectorAll('.btn-close-debt-modal').forEach(b => {
+      b.addEventListener('click', closeModal);
+    });
+
+    // Toggle ngân hàng
+    form?.querySelectorAll(`input[name="${modalId}Method"]`).forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        if (e.target.value === 'BANK') {
+          bankWrapper?.classList.remove('hidden');
+        } else {
+          bankWrapper?.classList.add('hidden');
+        }
+      });
+    });
+
+    function calculateTotal() {
+      let total = 0;
+      const rows = docsBody?.querySelectorAll('tr') || [];
+      rows.forEach(r => {
+        const cb = r.querySelector('.doc-check');
+        const input = r.querySelector('.doc-pay-amount');
+        if (cb && cb.checked && input) {
+          const val = parseMoney(input.value);
+          total += val;
+        }
+      });
+      if (sumDisplay) sumDisplay.textContent = formatVND(total);
+      return total;
+    }
+
+    checkAll?.addEventListener('change', (e) => {
+      const isChecked = e.target.checked;
+      const cbs = docsBody?.querySelectorAll('.doc-check') || [];
+      cbs.forEach(cb => {
+        cb.checked = isChecked;
+        const row = cb.closest('tr');
+        const input = row?.querySelector('.doc-pay-amount');
+        const maxDebt = parseInt(row?.getAttribute('data-debt') || '0', 10);
+        if (input) {
+          input.value = isChecked ? new Intl.NumberFormat('en-US').format(maxDebt) : '0';
+        }
+      });
+      calculateTotal();
+    });
+
+    // Lắng nghe sự kiện mở modal
+    window.addEventListener('open-' + modalId, (e) => {
+      const data = e.detail;
+      if (!data || !data.partner) return;
+
+      const { partner, targetType = 'PURCHASE', documents = [] } = data;
+
+      if (partnerIdInput) partnerIdInput.value = String(partner.id);
+      if (targetTypeInput) targetTypeInput.value = targetType;
+      if (partnerNameEl) partnerNameEl.textContent = partner.name || 'Đối tác';
+      if (partnerPhoneEl) partnerPhoneEl.textContent = partner.phone ? `(${partner.phone})` : '';
+
+      const isPurchase = targetType === 'PURCHASE';
+      if (titleEl) {
+        titleEl.textContent = isPurchase ? 'Thanh toán nợ Nhà Cung Cấp' : 'Thu nợ Khách Hàng';
+      }
+
+      // Lọc các chứng từ còn nợ > 0
+      const unpaidDocs = documents.filter(d => (d.debt_amount_cents ?? d.cod_amount_cents ?? d.debt ?? 0) > 0);
+      const totalDebt = unpaidDocs.reduce((s, d) => s + (d.debt_amount_cents ?? d.cod_amount_cents ?? d.debt ?? 0), 0);
+      if (partnerDebtEl) partnerDebtEl.textContent = formatVND(totalDebt);
+
+      if (noteInput) {
+        noteInput.value = isPurchase 
+          ? `Thanh toán công nợ NCC ${partner.name}` 
+          : `Thu tiền công nợ khách hàng ${partner.name}`;
+      }
+
+      if (unpaidDocs.length === 0) {
+        docsBody.innerHTML = `
+          <tr>
+            <td colspan="8" class="p-6 text-center text-gray-400 text-xs">
+              Đối tác này hiện không có chứng từ nào còn nợ!
+            </td>
+          </tr>
+        `;
+        if (sumDisplay) sumDisplay.textContent = '0đ';
+        modal.classList.remove('hidden');
+        return;
+      }
+
+      docsBody.innerHTML = unpaidDocs.map((doc, idx) => {
+        const code = escapeHtml(doc.receipt_code || doc.order_code || doc.ticket_code || `#${doc.id}`);
+        const date = escapeHtml(formatDate(doc.created_at));
+        const total = doc.total_amount_cents || doc.amount_total_cents || doc.repair_price_cents || 0;
+        const paid = doc.paid_amount_cents || 0;
+        const debt = doc.debt_amount_cents || doc.cod_amount_cents || (total - paid);
+        const docType = doc.doc_type || (doc.receipt_code ? 'PURCHASE' : doc.ticket_code ? 'REPAIR' : targetType);
+        
+        let typeBadge = '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800">Bán hàng</span>';
+        if (docType === 'PURCHASE') {
+          typeBadge = '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800">Nhập hàng</span>';
+        } else if (docType === 'REPAIR') {
+          typeBadge = '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">Sửa chữa</span>';
+        }
+
+        return `
+          <tr class="hover:bg-blue-50/40 transition" data-id="${doc.id}" data-code="${code}" data-debt="${debt}" data-doctype="${docType}">
+            <td class="p-2.5 text-center">
+              <input type="checkbox" class="doc-check rounded text-brand focus:ring-brand" checked />
+            </td>
+            <td class="p-2.5 font-bold font-mono text-blue-600">${code}</td>
+            <td class="p-2.5">${typeBadge}</td>
+            <td class="p-2.5 text-gray-500 tabular-nums">${date}</td>
+            <td class="p-2.5 text-right font-medium tabular-nums text-gray-800">${formatVND(total)}</td>
+            <td class="p-2.5 text-right text-emerald-700 tabular-nums">${formatVND(paid)}</td>
+            <td class="p-2.5 text-right text-red-700 font-bold tabular-nums">${formatVND(debt)}</td>
+            <td class="p-2.5 text-right">
+              <input
+                type="text"
+                class="doc-pay-amount w-28 py-1 px-2 border border-line rounded text-right tabular-nums font-bold text-gray-900 bg-white focus:border-brand focus:outline-none"
+                value="${new Intl.NumberFormat('en-US').format(debt)}"
+              />
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      // Gắn sự kiện cho checkbox & ô nhập tiền
+      docsBody.querySelectorAll('tr').forEach(r => {
+        const cb = r.querySelector('.doc-check');
+        const input = r.querySelector('.doc-pay-amount');
+        const maxDebt = parseInt(r.getAttribute('data-debt') || '0', 10);
+
+        cb?.addEventListener('change', () => {
+          if (cb.checked) {
+            input.value = new Intl.NumberFormat('en-US').format(maxDebt);
+          } else {
+            input.value = '0';
+          }
+          calculateTotal();
+        });
+
+        input?.addEventListener('input', () => {
+          const val = parseMoney(input.value);
+          if (!Number.isSafeInteger(val) || val > maxDebt) { cb.checked = true; calculateTotal(); return; }
+          input.value = new Intl.NumberFormat('en-US').format(val);
+          cb.checked = val > 0;
+          calculateTotal();
+        });
+      });
+
+      calculateTotal();
+      modal.classList.remove('hidden');
+    });
+
+    // Gửi thanh toán
+    form?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const partnerId = parseInt(partnerIdInput?.value || '0', 10);
+      const targetType = targetTypeInput?.value || 'PURCHASE';
+
+      const items = [];
+      let invalidAmount = false;
+      const rows = docsBody?.querySelectorAll('tr') || [];
+      rows.forEach(r => {
+        const cb = r.querySelector('.doc-check');
+        const input = r.querySelector('.doc-pay-amount');
+        const id = parseInt(r.getAttribute('data-id') || '0', 10);
+        const code = r.getAttribute('data-code') || '';
+        const doc_type = r.getAttribute('data-doctype') || targetType;
+        if (cb && cb.checked && input && id > 0) {
+          const amount = parseMoney(input.value);
+          if (!Number.isSafeInteger(amount) || amount <= 0 || amount > Number(r.getAttribute('data-debt'))) invalidAmount = true;
+          if (amount > 0) {
+            items.push({ id, code, amount_cents: amount, doc_type });
+          }
+        }
+      });
+
+      if (invalidAmount) { alert('Số tiền phải là số nguyên dương và không vượt nợ chứng từ.'); return; }
+      if (items.length === 0) {
+        alert('Vui lòng chọn ít nhất 1 chứng từ và nhập số tiền thanh toán!');
+        return;
+      }
+
+      const methodEl = form.querySelector(`input[name="${modalId}Method"]:checked`);
+      const method = methodEl ? methodEl.value : 'CASH';
+      const bankName = method === 'BANK' ? bankNameSelect?.value : undefined;
+      const note = noteInput?.value.trim();
+
+      const payload = { partner_id: partnerId, target_type: targetType, items, payment_method: method, bank_name: bankName, note };
+      const signature = JSON.stringify(payload);
+      if (!requestIds.has(signature)) requestIds.set(signature, crypto.randomUUID());
+      payload.request_id = requestIds.get(signature);
+
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Đang xử lý...';
+      }
+
+      try {
+        const res = await fetch('/api/admin/partners/pay-debt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const result = await res.json();
+        if (result.success) {
+          alert('Đã ghi thanh toán và cập nhật công nợ các chứng từ.');
+          closeModal();
+          window.location.reload();
+        } else {
+          alert('Lỗi: ' + (result.error || 'Không thể thanh toán'));
+        }
+      } catch (err) {
+        alert('Lỗi kết nối: ' + err.message);
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<span>✓ Xác nhận thanh toán</span>';
+        }
+      }
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupPayDebtModal);
+  } else {
+    setupPayDebtModal();
+  }
+</script>

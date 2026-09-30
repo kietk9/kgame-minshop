@@ -1,0 +1,968 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import QuickProductModal from '../../../components/admin/QuickProductModal.astro';
+import PartnerModal from '../../../components/admin/PartnerModal.astro';
+
+export const prerender = false;
+
+// 1. Lấy danh sách hàng hóa
+const { results: products } = await env.DB
+  .prepare(`
+    SELECT id, name, product_code, has_serial, tracking_mode, unit_name,
+           price_cents, price_used_cents, cost_price_cents, cost_price_used_cents,
+           stock_new, stock_used, stock
+    FROM products
+    WHERE active = 1
+    ORDER BY name ASC
+  `)
+  .all<any>();
+
+// 2. Lấy danh sách phân loại / phiên bản (nếu có)
+const { results: productTypes } = await env.DB
+  .prepare('SELECT id, product_id, name, sale_price_cents, cost_price_cents FROM product_types ORDER BY id ASC')
+  .all<any>();
+
+// 3. Lấy danh sách nhà cung cấp từ bảng đối tác thống nhất
+const { results: suppliers } = await env.DB
+  .prepare('SELECT id, partner_code AS supplier_code, name, phone, address, province, ward, address_detail, note FROM partners WHERE is_supplier = 1 ORDER BY name ASC')
+  .all<any>();
+
+// 4. Lấy danh mục chi phí nhập hàng
+const { results: expenseCategories } = await env.DB
+  .prepare('SELECT id, name, category_type, is_default FROM purchase_expense_categories ORDER BY id ASC')
+  .all<any>();
+
+// 5. Nếu có edit_id: Lấy dữ liệu phiếu nhập cũ để sửa
+const editIdParam = Astro.url.searchParams.get('edit_id');
+let editReceipt: any = null;
+if (editIdParam && !isNaN(Number(editIdParam))) {
+  const { getPurchaseReceiptById } = await import('../../../features/kgame/db');
+  editReceipt = await getPurchaseReceiptById(env.DB, Number(editIdParam));
+}
+
+const error = Astro.url.searchParams.get('error');
+const nowStr = new Date().toLocaleString('vi-VN', {
+  day: '2-digit', month: '2-digit', year: 'numeric',
+  hour: '2-digit', minute: '2-digit'
+});
+---
+
+<AdminLayout title="Nhập hàng" active="purchases">
+  <!-- THANH TIÊU ĐỀ & TÌM KIẾM HÀNG HÓA CHUẨN KIOTVIET (Ô TÌM KIẾM BÊN TRÁI) -->
+  <div class="mb-4 flex flex-wrap items-center gap-3">
+    <div class="flex items-center gap-2">
+      <a href="/admin/purchases" class="p-2 rounded-lg hover:bg-gray-100 text-gray-600 transition" title="Quay lại danh sách">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+      </a>
+      <h1 class="text-xl font-bold text-gray-900 whitespace-nowrap">Nhập hàng</h1>
+    </div>
+
+    <!-- Ô TÌM KIẾM HÀNG HÓA KÈM NÚT [+] TẠO MỚI (ĐẶT NGAY BÊN TRÁI CHUẨN KIOTVIET) -->
+    <div class="flex-1 max-w-xl relative">
+      <div class="relative flex items-center">
+        <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-gray-400">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        </div>
+        <input
+          type="text"
+          id="productSearchInput"
+          placeholder="Tìm hàng hóa theo mã hoặc tên (F3)..."
+          autocomplete="off"
+          class="w-full pl-10 pr-10 py-2 text-sm border border-line rounded-lg focus:outline-none focus:border-brand bg-white shadow-xs font-medium"
+        />
+        <button
+          type="button"
+          id="quickAddProductBtn"
+          class="absolute right-1.5 w-7 h-7 rounded bg-sky-500 hover:bg-sky-600 text-white flex items-center justify-center text-sm font-extrabold transition shadow-xs cursor-pointer"
+          title="Tạo nhanh hàng hóa mới (F4)"
+        >
+          +
+        </button>
+      </div>
+
+      <!-- DROPDOWN GỢI Ý TÌM KIẾM HÀNG HÓA -->
+      <div
+        id="productSearchResults"
+        class="hidden absolute left-0 right-0 top-full mt-1 bg-white border border-line rounded-xl shadow-xl z-50 max-h-72 overflow-y-auto divide-y divide-line"
+      >
+      </div>
+    </div>
+  </div>
+
+  {error && (
+    <div class="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex items-center gap-2">
+      <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
+      <span>{error}</span>
+    </div>
+  )}
+
+  <form id="purchaseForm" method="post" action="/api/admin/purchases">
+    <input type="hidden" name="purchase_payload" id="purchasePayload" />
+
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+      <!-- CỘT TRÁI (8/12): BẢNG DANH SÁCH HÀNG HÓA NHẬP CHUẨN KIOTVIET -->
+      <div class="lg:col-span-8 bg-white rounded-xl border border-line shadow-sm overflow-hidden">
+        <div class="overflow-x-auto min-h-[400px]">
+          <table class="w-full text-left text-[14px] text-gray-700">
+            <thead class="bg-[#f8f9fa] text-[13.5px] font-semibold text-gray-700 border-b border-line select-none">
+              <tr>
+                <th class="px-2.5 py-3 text-center w-8"></th>
+                <th class="px-2 py-3 text-center w-10">STT</th>
+                <th class="px-3 py-3 w-24">Mã hàng</th>
+                <th class="px-3 py-3 min-w-[180px]">Tên hàng</th>
+                <th class="px-2.5 py-3 w-28 text-center">Tình trạng</th>
+                <th class="px-3 py-3 w-36">Serial / Mã bộ</th>
+                <th class="px-2 py-3 w-14 text-center">ĐVT</th>
+                <th class="px-2 py-3 w-20 text-center">Số lượng</th>
+                <th class="px-3 py-3 w-28 text-right">Đơn giá</th>
+                <th class="px-2 py-3 w-24 text-right">Giảm giá</th>
+                <th class="px-3 py-3 w-32 text-right">Thành tiền</th>
+              </tr>
+            </thead>
+            <tbody id="purchaseTableBody" class="divide-y divide-line">
+            </tbody>
+          </table>
+
+          <!-- Empty state -->
+          <div id="emptyTableNotice" class="py-20 text-center text-gray-400">
+            <svg class="w-14 h-14 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+            <p class="font-bold text-gray-600 text-sm">Chưa có hàng hóa nào trong phiếu nhập</p>
+            <p class="text-xs text-gray-400 mt-1">Gõ mã hoặc tên vào ô tìm kiếm ở trên để thêm hàng</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- CỘT PHẢI (4/12): THÔNG TIN NHÀ CUNG CẤP & CHI PHÍ NHẬP (CHUẨN ẢNH KIOTVIET) -->
+      <div class="lg:col-span-4 bg-white rounded-xl border border-line p-4.5 shadow-sm space-y-3.5 text-[13.5px]">
+        <!-- NGƯỜI TẠO & NGÀY GIỜ -->
+        <div class="flex items-center justify-between border-b border-line pb-2.5 text-xs text-gray-500">
+          <div class="flex items-center gap-1.5 font-bold text-gray-800">
+            <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+            <select id="staffSelect" class="bg-transparent border-0 font-bold text-gray-800 focus:outline-none cursor-pointer">
+              <option value="Kiệt">Kiệt (Kho số 5)</option>
+              <option value="Kỹ thuật Kgame">Kỹ thuật Kgame</option>
+              <option value="Admin">Admin</option>
+            </select>
+          </div>
+          <div class="tabular-nums text-gray-500">
+            {nowStr}
+          </div>
+        </div>
+
+        <!-- TÌM & CHỌN NHÀ CUNG CẤP KÈM NÚT [+] THÊM MỚI -->
+        <div>
+          <label class="block text-xs font-semibold text-gray-700 mb-1">Nhà cung cấp</label>
+          <div class="flex items-center gap-1.5">
+            <div class="relative flex-1">
+              <select
+                id="supplierSelect"
+                class="w-full py-2 px-2.5 text-xs border border-line rounded-lg focus:outline-none focus:border-brand bg-white font-medium text-gray-900"
+              >
+                <option value="">-- Tìm / Chọn nhà cung cấp --</option>
+                {suppliers.map((s) => (
+                  <option value={s.id} data-name={s.name} data-phone={s.phone || ''} data-address={s.address || ''}>
+                    {s.name} {s.phone ? `(${s.phone})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="button"
+              id="openAddSupplierBtn"
+              class="w-8 h-8 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 flex items-center justify-center font-bold text-base transition cursor-pointer shrink-0"
+              title="Thêm mới nhà cung cấp"
+            >
+              +
+            </button>
+          </div>
+          <input type="hidden" id="supplierNameInput" />
+          <input type="hidden" id="supplierPhoneInput" />
+        </div>
+
+        <!-- CÁC THÔNG TIN MÃ PHIẾU, MÃ ĐẶT HÀNG, SỐ HÓA ĐƠN -->
+        <div class="space-y-2 pt-2 border-t border-line text-xs">
+          <div class="flex items-center justify-between">
+            <span class="text-gray-600 font-medium">Mã phiếu nhập:</span>
+            <input type="text" id="receiptCode" placeholder="Mã phiếu tự động" class="w-36 py-1 px-2 border border-line rounded bg-gray-50 text-gray-500 font-mono text-right text-xs" readonly />
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-gray-600 font-medium">Mã đặt hàng nhập:</span>
+            <input type="text" id="orderReceiptCodeInput" placeholder="Nhập mã đặt..." class="w-36 py-1 px-2 border border-line rounded text-right text-xs" />
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-gray-600 font-medium">Trạng thái:</span>
+            <span id="receiptStatusBadge" class="px-2 py-0.5 rounded font-bold text-[11px] bg-emerald-100 text-emerald-800">{editReceipt?.receipt_status === 'DRAFT' ? 'Phiếu tạm' : editReceipt?.receipt_status === 'CANCELLED' ? 'Đã hủy' : 'Hoàn thành'}</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-gray-600 font-medium">Số hóa đơn đầu vào:</span>
+            <input type="text" id="invoiceNumberInput" placeholder="Nhập số hóa đơn..." class="w-36 py-1 px-2 border border-line rounded text-right text-xs" />
+          </div>
+        </div>
+
+        <!-- BẢNG TÍNH TIỀN CHUẨN THEO ẢNH KIOTVIET -->
+        <div class="pt-2.5 border-t border-line space-y-2 text-[13.5px]">
+          <div class="flex items-center justify-between">
+            <span class="text-gray-600">Tổng tiền hàng:</span>
+            <span id="subtotalDisplay" class="font-bold tabular-nums text-gray-900">0</span>
+          </div>
+
+          <div class="flex items-center justify-between">
+            <span class="text-gray-600">Giảm giá:</span>
+            <input type="text" id="discountInput" value="0" class="w-32 py-1 px-2 text-[13px] border border-line rounded text-right tabular-nums font-semibold" />
+          </div>
+
+          <div class="space-y-1.5">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-1">
+                <span class="text-gray-600">Chi phí nhập trả NCC:</span>
+                <span class="text-gray-400 text-xs cursor-help" title="Chi phí do NCC tính thêm (đóng gói, bốc dỡ của NCC)">ⓘ</span>
+              </div>
+              <input type="text" id="extraFeeInput" value="0" class="w-32 py-1 px-2 text-[13px] border border-line rounded text-right tabular-nums font-semibold" />
+            </div>
+            <div class="flex items-center gap-1">
+              <select id="extraFeeCategorySelect" class="flex-1 py-1 px-2 text-[11.5px] border border-line rounded bg-white text-gray-700">
+                <option value="">-- Chọn loại chi phí NCC --</option>
+                {expenseCategories.filter((c: any) => c.category_type === 'NCC').map((c: any) => (
+                  <option value={c.name}>{c.name}</option>
+                ))}
+              </select>
+              <button type="button" class="btn-create-expense-cat px-2 py-0.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded text-xs font-bold" data-type="NCC" title="Tạo loại chi phí mới">+</button>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between pt-2 border-t border-line font-bold text-gray-900">
+            <span>Cần trả nhà cung cấp:</span>
+            <span id="totalToNCCDisplay" class="tabular-nums text-blue-700 text-base font-extrabold">0</span>
+          </div>
+
+          <!-- TIỀN TRẢ NHÀ CUNG CẤP -->
+          <div class="pt-2 border-t border-line space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-gray-700 font-semibold text-xs">{editReceipt ? 'Tổng tiền đã trả NCC (không sửa):' : 'Tiền trả nhà cung cấp:'}</span>
+              <input type="text" id="paidAmountInput" value="0" class="w-36 py-1.5 px-2 text-[13.5px] border border-blue-400 rounded font-bold tabular-nums text-right text-blue-700 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            </div>
+
+            <!-- HÌNH THỨC THANH TOÁN -->
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <label class="flex items-center gap-1.5 p-1.5 border border-line rounded-lg cursor-pointer hover:bg-gray-50 has-[:checked]:border-brand has-[:checked]:bg-blue-50">
+                <input type="radio" name="payment_method" value="CASH" checked class="text-brand focus:ring-brand" />
+                <span class="font-medium">Tiền mặt</span>
+              </label>
+              <label class="flex items-center gap-1.5 p-1.5 border border-line rounded-lg cursor-pointer hover:bg-gray-50 has-[:checked]:border-brand has-[:checked]:bg-blue-50">
+                <input type="radio" name="payment_method" value="BANK" class="text-brand focus:ring-brand" />
+                <span class="font-medium">Chuyển khoản</span>
+              </label>
+            </div>
+
+            <div id="bankBox" class="hidden">
+              <select id="bankNameSelect" class="w-full py-1.5 px-2 text-xs border border-line rounded-lg focus:outline-none focus:border-brand bg-white">
+                <option value="Vietcombank">Vietcombank (TK Chính Cửa Hàng)</option>
+                <option value="MB Bank">MB Bank (Tài khoản POS)</option>
+                <option value="Techcombank">Techcombank</option>
+                <option value="BIDV">BIDV</option>
+              </select>
+            </div>
+
+            <div class="flex items-center justify-between text-xs pt-1 text-gray-500">
+              <span>Tính vào công nợ NCC:</span>
+              <span id="debtDisplay" class="font-bold tabular-nums text-amber-700">0</span>
+            </div>
+          </div>
+
+          <!-- CHI PHÍ NHẬP KHÁC (VẬN CHUYỂN, CHÀNH XE, BỐC XẾP...) -->
+          <div class="pt-2.5 border-t border-line space-y-2 bg-amber-50/70 p-2.5 rounded-lg border border-amber-200 text-xs">
+            <div class="flex items-center justify-between">
+              <div>
+                <span class="font-bold text-amber-900 block">Chi phí nhập khác</span>
+                <span class="text-[10.5px] text-amber-700">Phí vận chuyển, chành xe, bốc xếp...</span>
+              </div>
+              <input type="text" id="otherFeeInput" value="0" class="w-32 py-1 px-2 text-[13px] border border-amber-300 rounded text-right tabular-nums font-bold text-amber-900 bg-white" />
+            </div>
+            <div class="flex items-center gap-1">
+              <select id="otherFeeCategorySelect" class="flex-1 py-1 px-2 text-[11.5px] border border-amber-300 rounded bg-white text-gray-700">
+                <option value="">-- Chọn loại chi phí khác --</option>
+                {expenseCategories.filter((c: any) => c.category_type === 'OTHER').map((c: any) => (
+                  <option value={c.name}>{c.name}</option>
+                ))}
+              </select>
+              <button type="button" class="btn-create-expense-cat px-2 py-0.5 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded text-xs font-bold" data-type="OTHER" title="Tạo loại chi phí mới">+</button>
+            </div>
+            <input type="text" id="otherFeeNoteInput" placeholder="Ghi chú phí khác (VD: Cước xe Phương Trang...)" class="w-full py-1 px-2 text-xs border border-amber-200 rounded bg-white text-gray-800" />
+            <div class="text-[10.5px] text-amber-800 italic">
+              💡 Tự động tạo phiếu chi Sổ quỹ &amp; phân bổ vào Giá Vốn hàng hóa.
+            </div>
+          </div>
+        </div>
+
+        <!-- GHI CHÚ PHIẾU -->
+        <div>
+          <textarea id="receiptNote" rows="2" placeholder="Ghi chú phiếu nhập hàng..." class="w-full text-xs border border-line rounded-lg p-2.5 focus:outline-none focus:border-brand"></textarea>
+        </div>
+
+        <!-- 2 NÚT THAO TÁC CHUẨN KIOTVIET (LƯU TẠM vs HOÀN THÀNH) -->
+        <div class="grid grid-cols-2 gap-3 pt-1">
+          <button
+            type="button"
+            id="saveDraftBtn"
+            class="w-full py-2.5 px-3 rounded-xl border-2 border-blue-600 bg-white text-blue-700 font-bold text-xs hover:bg-blue-50 transition cursor-pointer shadow-xs"
+            title="Lưu tạm / Đặt hàng nhập - Hàng chờ về, chưa tăng tồn kho"
+          >
+            📋 Lưu tạm
+          </button>
+          <button
+            type="button"
+            id="saveCompleteBtn"
+            class="w-full py-2.5 px-3 rounded-xl bg-blue-600 text-white font-bold text-xs hover:bg-blue-700 transition shadow-sm cursor-pointer"
+            title="Hoàn tất nhập hàng - Tăng tồn kho và hoàn thành phiếu"
+          >
+            ✓ Hoàn thành
+          </button>
+        </div>
+      </div>
+    </div>
+  </form>
+
+  <!-- POPUP TẠO HÀNG HÓA CHUẨN KIOTVIET -->
+  <QuickProductModal />
+
+  <!-- MODAL ĐỐI TÁC CHUẨN DÙNG CHUNG (TỰ ĐỘNG CHỌN VAI TRÒ NHÀ CUNG CẤP) -->
+  <PartnerModal modalId="quickSupplierModal" defaultType="SUPPLIER" />
+
+  <!-- MODAL TẠO DANH MỤC CHI PHÍ NHẬP HÀNG -->
+  <div id="expenseCategoryModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b pb-2">
+        <h3 id="expenseCategoryModalTitle" class="font-bold text-gray-900 text-sm">Tạo loại chi phí mới</h3>
+        <button type="button" id="closeExpenseCategoryModalBtn" class="text-gray-400 hover:text-gray-600 font-bold">✕</button>
+      </div>
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block font-semibold text-gray-700 mb-1">Tên loại chi phí <span class="text-red-500">*</span></label>
+          <input type="text" id="newExpenseCategoryName" placeholder="VD: Phí pallet gỗ, Cước xe Phương Trang..." class="w-full p-2 border border-gray-300 rounded-lg text-xs focus:outline-none focus:border-brand font-medium" />
+        </div>
+        <input type="hidden" id="newExpenseCategoryType" value="OTHER" />
+      </div>
+      <div class="flex items-center justify-end gap-2 pt-2 border-t">
+        <button type="button" id="cancelExpenseCategoryModalBtn" class="px-3 py-1.5 rounded-lg border border-gray-300 text-xs font-semibold hover:bg-gray-100">Hủy</button>
+        <button type="button" id="saveExpenseCategoryModalBtn" class="px-4 py-1.5 rounded-lg bg-brand text-white text-xs font-bold hover:bg-blue-700 shadow-sm">Lưu danh mục</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DỮ LIỆU JSON ĐỂ JAVASCRIPT XỬ LÝ -->
+  <script is:inline define:vars={{ products, productTypes, suppliers, expenseCategories, editReceipt }}>
+    window.KGAME_PRODUCTS = products;
+    window.KGAME_PRODUCT_TYPES = productTypes;
+    window.KGAME_SUPPLIERS = suppliers;
+    window.KGAME_EXPENSE_CATS = expenseCategories;
+    window.KGAME_EDIT_RECEIPT = editReceipt;
+  </script>
+
+  <script>
+  import { requireSelect } from '../../../features/kgame/formElements';
+    const receiptCode = document.querySelector<HTMLInputElement>('#receiptCode');
+    const products = (window as any).KGAME_PRODUCTS || [];
+    const productTypes = (window as any).KGAME_PRODUCT_TYPES || [];
+    const suppliers = (window as any).KGAME_SUPPLIERS || [];
+    const editReceipt = (window as any).KGAME_EDIT_RECEIPT || null;
+
+    const searchInput = document.getElementById('productSearchInput') as HTMLInputElement;
+    const searchResults = document.getElementById('productSearchResults') as HTMLElement;
+    const quickAddBtn = document.getElementById('quickAddProductBtn');
+    const tableBody = document.getElementById('purchaseTableBody') as HTMLElement;
+    const emptyNotice = document.getElementById('emptyTableNotice') as HTMLElement;
+
+    const subtotalDisplay = document.getElementById('subtotalDisplay') as HTMLElement;
+    const totalToNCCDisplay = document.getElementById('totalToNCCDisplay') as HTMLElement;
+    const debtDisplay = document.getElementById('debtDisplay') as HTMLElement;
+    const discountInput = document.getElementById('discountInput') as HTMLInputElement;
+    const extraFeeInput = document.getElementById('extraFeeInput') as HTMLInputElement;
+    const otherFeeInput = document.getElementById('otherFeeInput') as HTMLInputElement;
+    const otherFeeNoteInput = document.getElementById('otherFeeNoteInput') as HTMLInputElement;
+    const paidAmountInput = document.getElementById('paidAmountInput') as HTMLInputElement;
+    const receiptStatusBadge = document.getElementById('receiptStatusBadge') as HTMLElement;
+    const invoiceNumberInput = document.getElementById('invoiceNumberInput') as HTMLInputElement;
+    const orderReceiptCodeInput = document.getElementById('orderReceiptCodeInput') as HTMLInputElement;
+
+    const supplierSelect = requireSelect('#supplierSelect');
+    const supplierNameInput = document.getElementById('supplierNameInput') as HTMLInputElement;
+    const supplierPhoneInput = document.getElementById('supplierPhoneInput') as HTMLInputElement;
+    const openAddSupplierBtn = document.getElementById('openAddSupplierBtn');
+
+    const bankBox = document.getElementById('bankBox') as HTMLElement;
+    const saveDraftBtn = document.getElementById('saveDraftBtn');
+    const saveCompleteBtn = document.getElementById('saveCompleteBtn');
+    const purchasePayload = document.getElementById('purchasePayload') as HTMLInputElement;
+    const purchaseForm = document.getElementById('purchaseForm') as HTMLFormElement;
+
+    // Danh sách mặt hàng trong bảng
+    let items: Array<{
+      product_id: number;
+      product_type_id?: number | null;
+      name: string;
+      product_code?: string;
+      has_serial: boolean;
+      unit_name: string;
+      condition: 'NEW' | 'QSD';
+      program_code: string;
+      quantity: number;
+      unit_cost_cents: number;
+      discount_cents: number;
+      note?: string;
+    }> = [];
+
+    const formatVND = (cents: number) => new Intl.NumberFormat('vi-VN').format(cents);
+
+    // Toggle Bank account
+    document.querySelectorAll('input[name="payment_method"]').forEach((r) => {
+      r.addEventListener('change', () => {
+        const val = (document.querySelector('input[name="payment_method"]:checked') as HTMLInputElement)?.value;
+        if (bankBox) bankBox.style.display = val === 'BANK' ? 'block' : 'none';
+      });
+    });
+
+    // Chọn nhà cung cấp từ dropdown
+    supplierSelect?.addEventListener('change', () => {
+      const opt = supplierSelect.selectedOptions[0];
+      if (opt && opt.value) {
+        supplierNameInput.value = opt.getAttribute('data-name') || '';
+        supplierPhoneInput.value = opt.getAttribute('data-phone') || '';
+      } else {
+        supplierNameInput.value = '';
+        supplierPhoneInput.value = '';
+      }
+    });
+
+    // Modal tạo nhanh Nhà cung cấp mới (Dùng chung PartnerModal)
+    openAddSupplierBtn?.addEventListener('click', () => {
+      window.dispatchEvent(new CustomEvent('open-quickSupplierModal'));
+    });
+
+    // Lắng nghe sự kiện lưu đối tác thành công từ PartnerModal
+    window.addEventListener('partner-saved', ((e: CustomEvent) => {
+      const pData = e.detail;
+      if (!pData) return;
+
+      let opt = Array.from(supplierSelect.options).find(o => o.value === String(pData.id));
+      if (!opt) {
+        opt = document.createElement('option');
+        opt.value = String(pData.id);
+        supplierSelect.appendChild(opt);
+      }
+      opt.setAttribute('data-name', pData.name);
+      opt.setAttribute('data-phone', pData.phone || '');
+      opt.setAttribute('data-address', pData.address || '');
+      opt.textContent = `${pData.name} ${pData.phone ? `(${pData.phone})` : ''}`;
+      opt.selected = true;
+
+      supplierNameInput.value = pData.name;
+      supplierPhoneInput.value = pData.phone || '';
+    }) as EventListener);
+
+    // MODAL TẠO NHANH LOẠI CHI PHÍ NHẬP HÀNG
+    const expenseModal = document.getElementById('expenseCategoryModal');
+    const expenseCatTitle = document.getElementById('expenseCategoryModalTitle');
+    const newExpenseCatName = document.getElementById('newExpenseCategoryName') as HTMLInputElement | null;
+    const newExpenseCatType = document.getElementById('newExpenseCategoryType') as HTMLInputElement | null;
+    const closeExpenseModalBtn = document.getElementById('closeExpenseCategoryModalBtn');
+    const cancelExpenseModalBtn = document.getElementById('cancelExpenseCategoryModalBtn');
+    const saveExpenseModalBtn = document.getElementById('saveExpenseCategoryModalBtn');
+
+    document.querySelectorAll('.btn-create-expense-cat').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const cType = btn.getAttribute('data-type') || 'OTHER';
+        if (newExpenseCatType) newExpenseCatType.value = cType;
+        if (expenseCatTitle) {
+          expenseCatTitle.textContent = cType === 'NCC' ? 'Tạo loại chi phí trả NCC mới' : 'Tạo loại chi phí vận chuyển/khác mới';
+        }
+        if (newExpenseCatName) newExpenseCatName.value = '';
+        if (expenseModal) {
+          expenseModal.classList.remove('hidden');
+          setTimeout(() => newExpenseCatName?.focus(), 100);
+        }
+      });
+    });
+
+    const closeExpenseModal = () => expenseModal?.classList.add('hidden');
+    closeExpenseModalBtn?.addEventListener('click', closeExpenseModal);
+    cancelExpenseModalBtn?.addEventListener('click', closeExpenseModal);
+
+    saveExpenseModalBtn?.addEventListener('click', async () => {
+      const catName = newExpenseCatName?.value.trim();
+      const catType = newExpenseCatType?.value || 'OTHER';
+      if (!catName) {
+        alert('Vui lòng nhập tên loại chi phí!');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/admin/suppliers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'create_category',
+            name: catName,
+            category_type: catType
+          })
+        });
+        const result = await res.json() as any;
+        if (result.success && result.data) {
+          const selectId = catType === 'NCC' ? 'extraFeeCategorySelect' : 'otherFeeCategorySelect';
+          const sel = document.getElementById(selectId) as HTMLSelectElement | null;
+          if (sel) {
+            const opt = document.createElement('option');
+            opt.value = result.data.name;
+            opt.textContent = result.data.name;
+            sel.appendChild(opt);
+            opt.selected = true;
+          }
+          closeExpenseModal();
+          alert(`Đã thêm loại chi phí "${result.data.name}" thành công!`);
+        } else {
+          alert('Lỗi: ' + (result.error || 'Không thể tạo danh mục'));
+        }
+      } catch (e: any) {
+        alert('Lỗi mạng: ' + e.message);
+      }
+    });
+
+    // Mở nhanh popup tạo hàng hóa
+    quickAddBtn?.addEventListener('click', () => {
+      const q = searchInput?.value.trim();
+      (window as any).openQuickProductModal(q || undefined);
+    });
+
+    // Lắng nghe sự kiện hàng hóa mới được tạo thành công từ modal
+    window.addEventListener('product-created', (e: any) => {
+      const newProd = e.detail;
+      if (newProd) {
+        products.push(newProd);
+        addProductToTable(newProd);
+        if (searchInput) searchInput.value = '';
+      }
+    });
+
+    // 1. Tìm kiếm hàng hóa
+    searchInput?.addEventListener('input', () => {
+      const q = searchInput.value.trim().toLowerCase();
+      if (!q) {
+        searchResults.classList.add('hidden');
+        return;
+      }
+
+      const matches = products.filter((p: any) =>
+        (p.name && p.name.toLowerCase().includes(q)) ||
+        (p.product_code && p.product_code.toLowerCase().includes(q))
+      );
+
+      const addNewDiv = `
+        <div class="p-3 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold cursor-pointer text-xs flex items-center justify-between border-t border-blue-200 transition select-none" onclick="window.openQuickProductModal('${searchInput.value.trim()}')">
+          <div class="flex items-center gap-2">
+            <span class="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-extrabold text-xs shadow-xs">+</span>
+            <span>Thêm mới hàng hóa <strong class="text-blue-900">"${searchInput.value.trim()}"</strong></span>
+          </div>
+          <span class="text-[11px] text-blue-600 underline font-medium">Mở form KiotViet &rarr;</span>
+        </div>
+      `;
+
+      if (matches.length === 0) {
+        searchResults.innerHTML = `
+          <div class="p-3 text-center text-xs text-gray-500">
+            Không tìm thấy hàng hóa khớp với "<strong>${searchInput.value.trim()}</strong>".
+          </div>
+          ${addNewDiv}
+        `;
+        searchResults.classList.remove('hidden');
+        return;
+      }
+
+      searchResults.innerHTML = matches.map((p: any) => {
+        const isUsedOnly = (p.price_used_cents > 0 && !p.price_cents) || (p.stock_used > 0 && !p.stock_new);
+        const costPrice = isUsedOnly ? (p.cost_price_used_cents || p.cost_price_cents || 0) : (p.cost_price_cents || p.cost_price_used_cents || 0);
+        return `
+          <div class="search-item p-3 hover:bg-blue-50 cursor-pointer flex items-center justify-between text-xs transition" data-id="${p.id}">
+            <div>
+              <div class="font-bold text-gray-900 flex items-center gap-1.5">
+                <span>${p.name}</span>
+                ${isUsedOnly ? '<span class="px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 font-bold text-[10px]">Cũ (QSD)</span>' : ''}
+              </div>
+              <div class="text-[11px] text-gray-500 font-mono mt-0.5">${p.product_code || ''} • ĐVT: ${p.unit_name || 'Cái'}</div>
+            </div>
+            <div class="text-right">
+              <div class="text-blue-700 font-mono font-bold">Giá vốn: ${formatVND(costPrice)}</div>
+              <div class="text-[11px] text-gray-500">Tồn: ${p.stock || 0} (${p.has_serial ? 'Mã bộ' : 'Số lượng'})</div>
+            </div>
+          </div>
+        `;
+      }).join('') + addNewDiv;
+
+      searchResults.classList.remove('hidden');
+
+      searchResults.querySelectorAll('.search-item').forEach((el) => {
+        el.addEventListener('click', () => {
+          const id = Number(el.getAttribute('data-id'));
+          const selected = products.find((p: any) => p.id === id);
+          if (selected) {
+            addProductToTable(selected);
+            searchResults.classList.add('hidden');
+            searchInput.value = '';
+          }
+        });
+      });
+    });
+
+    // Đóng dropdown khi bấm ra ngoài
+    document.addEventListener('click', (e) => {
+      if (!searchInput.contains(e.target as Node) && !searchResults.contains(e.target as Node)) {
+        searchResults.classList.add('hidden');
+      }
+    });
+
+    // 2. Thêm mặt hàng vào bảng nhập
+    function addProductToTable(prod: any) {
+      const isUsedOnly = (prod.price_used_cents > 0 && !prod.price_cents) || (prod.stock_used > 0 && !prod.stock_new);
+      const defaultCondition = isUsedOnly ? 'QSD' : 'NEW';
+      const defaultCost = isUsedOnly ? (prod.cost_price_used_cents || prod.cost_price_cents || 0) : (prod.cost_price_cents || prod.cost_price_used_cents || 0);
+
+      const existing = items.find((it) => it.product_id === prod.id && !prod.has_serial && it.condition === defaultCondition);
+      if (existing) {
+        existing.quantity += 1;
+      } else {
+        items.push({
+          product_id: prod.id,
+          name: prod.name,
+          product_code: prod.product_code,
+          has_serial: prod.has_serial === 1 || prod.tracking_mode === 'CODE',
+          unit_name: prod.unit_name || 'Cái',
+          condition: defaultCondition,
+          program_code: '',
+          quantity: 1,
+          unit_cost_cents: defaultCost,
+          discount_cents: 0,
+          note: ''
+        });
+      }
+      renderTable();
+    }
+
+    // 3. Render bảng mặt hàng
+    function renderTable() {
+      if (items.length === 0) {
+        tableBody.innerHTML = '';
+        emptyNotice.classList.remove('hidden');
+        recalc();
+        return;
+      }
+
+      emptyNotice.classList.add('hidden');
+
+      tableBody.innerHTML = items.map((it, idx) => {
+        const lineTotal = it.quantity * it.unit_cost_cents - it.discount_cents;
+        return `
+          <tr class="hover:bg-blue-50/40 transition text-[13.5px]">
+            <td class="px-2.5 py-2.5 text-center">
+              <button type="button" class="text-gray-400 hover:text-red-600 transition cursor-pointer" onclick="window.removePurchaseItem(${idx})">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+              </button>
+            </td>
+            <td class="px-2 py-2.5 text-center text-gray-500 tabular-nums">${idx + 1}</td>
+            <td class="px-3 py-2.5 text-gray-600 font-mono text-xs whitespace-nowrap">${it.product_code || '--'}</td>
+            <td class="px-3 py-2.5">
+              <div class="font-bold text-gray-900">${it.name}</div>
+              <input type="text" placeholder="Ghi chú hàng..." value="${it.note || ''}" class="w-full mt-1 py-0.5 px-1.5 text-[11.5px] border border-line rounded text-gray-600 font-normal" onchange="window.updateItemNote(${idx}, this.value)" />
+            </td>
+            <td class="px-2.5 py-2.5 text-center">
+              <select class="py-1 px-1.5 text-[12px] border border-line rounded-md bg-white font-bold cursor-pointer ${it.condition === 'NEW' ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-amber-700 bg-amber-50 border-amber-200'}" onchange="window.updateItemCondition(${idx}, this.value)">
+                <option value="NEW" ${it.condition === 'NEW' ? 'selected' : ''}>Mới (NEW)</option>
+                <option value="QSD" ${it.condition === 'QSD' ? 'selected' : ''}>Cũ (QSD)</option>
+              </select>
+            </td>
+            <td class="px-3 py-2.5">
+              ${it.has_serial ? `
+                <input
+                  type="text"
+                  placeholder="Nhập Serial / Mã bộ..."
+                  value="${it.program_code || ''}"
+                  class="w-full py-1 px-2 text-[12px] border border-blue-300 rounded font-mono text-brand bg-blue-50/50"
+                  oninput="window.updateItemSerial(${idx}, this.value)"
+                />
+              ` : `
+                <span class="text-gray-400 italic text-[11px]">--</span>
+              `}
+            </td>
+            <td class="px-2 py-2.5 text-center text-gray-600 text-xs">${it.unit_name}</td>
+            <td class="px-2 py-2.5 text-center">
+              <input
+                type="number"
+                min="1"
+                value="${it.quantity}"
+                ${it.has_serial ? 'disabled' : ''}
+                class="w-14 py-1 px-1 text-center tabular-nums font-bold text-xs border border-line rounded ${it.has_serial ? 'bg-gray-100' : 'bg-white'}"
+                oninput="window.updateItemQty(${idx}, this.value)"
+              />
+            </td>
+            <td class="px-3 py-2.5 text-right">
+              <input
+                type="text"
+                value="${new Intl.NumberFormat('en-US').format(it.unit_cost_cents)}"
+                class="w-24 py-1 px-1.5 text-right tabular-nums font-bold text-xs border border-line rounded bg-white text-gray-900"
+                oninput="window.updateItemPrice(${idx}, this.value)"
+              />
+            </td>
+            <td class="px-2 py-2.5 text-right">
+              <input
+                type="text"
+                value="${it.discount_cents ? new Intl.NumberFormat('en-US').format(it.discount_cents) : '0'}"
+                class="w-20 py-1 px-1.5 text-right tabular-nums font-normal text-xs border border-line rounded bg-white text-gray-600"
+                oninput="window.updateItemDiscount(${idx}, this.value)"
+              />
+            </td>
+            <td class="px-3 py-2.5 text-right font-bold tabular-nums text-gray-900 whitespace-nowrap text-xs">
+              ${formatVND(Math.max(0, lineTotal))}
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      recalc();
+    }
+
+    // Helper gắn hàm cho Window
+    (window as any).removePurchaseItem = function (idx: number) {
+      items.splice(idx, 1);
+      renderTable();
+    };
+
+    (window as any).updateItemNote = function (idx: number, val: string) {
+      if (items[idx]) items[idx].note = val;
+    };
+
+    (window as any).updateItemCondition = function (idx: number, val: string) {
+      if (items[idx]) {
+        items[idx].condition = val as any;
+        const prod = products.find((p: any) => p.id === items[idx].product_id);
+        if (prod) {
+          if (val === 'QSD' && prod.cost_price_used_cents) {
+            items[idx].unit_cost_cents = prod.cost_price_used_cents;
+          } else if (val === 'NEW' && prod.cost_price_cents) {
+            items[idx].unit_cost_cents = prod.cost_price_cents;
+          }
+        }
+        renderTable();
+      }
+    };
+
+    (window as any).updateItemSerial = function (idx: number, val: string) {
+      if (items[idx]) items[idx].program_code = val.trim();
+    };
+
+    (window as any).updateItemQty = function (idx: number, val: string) {
+      if (items[idx]) {
+        items[idx].quantity = Math.max(1, Number(val) || 1);
+        recalc();
+      }
+    };
+
+    (window as any).updateItemPrice = function (idx: number, val: string) {
+      if (items[idx]) {
+        const num = Number(val.replace(/\D/g, '')) || 0;
+        items[idx].unit_cost_cents = num;
+        recalc();
+      }
+    };
+
+    (window as any).updateItemDiscount = function (idx: number, val: string) {
+      if (items[idx]) {
+        const num = Number(val.replace(/\D/g, '')) || 0;
+        items[idx].discount_cents = num;
+        recalc();
+      }
+    };
+
+    // 4. Tính toán tổng tiền phiếu
+    function recalc() {
+      let subtotal = 0;
+      items.forEach((it) => {
+        const line = it.quantity * it.unit_cost_cents - (it.discount_cents || 0);
+        subtotal += Math.max(0, line);
+      });
+
+      const disc = Number(discountInput?.value.replace(/\D/g, '')) || 0;
+      const extraFee = Number(extraFeeInput?.value.replace(/\D/g, '')) || 0;
+      const otherFee = Number(otherFeeInput?.value.replace(/\D/g, '')) || 0;
+
+      // Cần trả NCC = Tổng tiền hàng - Giảm giá + Chi phí trả NCC
+      const totalToNCC = Math.max(0, subtotal - disc + extraFee);
+
+      if (subtotalDisplay) subtotalDisplay.textContent = formatVND(subtotal);
+      if (totalToNCCDisplay) totalToNCCDisplay.textContent = formatVND(totalToNCC);
+
+      // Mặc định điền tiền trả = tổng cần trả NCC
+      if (!editReceipt && paidAmountInput && !paidAmountInput.dataset.manual) {
+        paidAmountInput.value = new Intl.NumberFormat('vi-VN').format(totalToNCC);
+      }
+
+      const paid = Number(paidAmountInput?.value.replace(/\D/g, '')) || 0;
+      const debt = Math.max(0, totalToNCC - paid + (editReceipt?.refunded_amount_cents || 0));
+
+      if (debtDisplay) debtDisplay.textContent = formatVND(debt);
+    }
+
+    discountInput?.addEventListener('input', () => {
+      const val = discountInput.value.replace(/\D/g, '');
+      discountInput.value = val ? new Intl.NumberFormat('vi-VN').format(Number(val)) : '0';
+      recalc();
+    });
+
+    extraFeeInput?.addEventListener('input', () => {
+      const val = extraFeeInput.value.replace(/\D/g, '');
+      extraFeeInput.value = val ? new Intl.NumberFormat('vi-VN').format(Number(val)) : '0';
+      recalc();
+    });
+
+    otherFeeInput?.addEventListener('input', () => {
+      const val = otherFeeInput.value.replace(/\D/g, '');
+      otherFeeInput.value = val ? new Intl.NumberFormat('vi-VN').format(Number(val)) : '0';
+      recalc();
+    });
+
+    paidAmountInput?.addEventListener('input', () => {
+      paidAmountInput.dataset.manual = '1';
+      const val = paidAmountInput.value.replace(/\D/g, '');
+      paidAmountInput.value = val ? new Intl.NumberFormat('vi-VN').format(Number(val)) : '0';
+      recalc();
+    });
+
+    // Keep one request key for retries from this form.
+    const purchaseRequestId = crypto.randomUUID();
+
+    // 5. Submit phiếu nhập
+    function handleSave(status: 'COMPLETED' | 'DRAFT') {
+      if (items.length === 0) {
+        alert('Vui lòng thêm ít nhất 1 hàng hóa vào phiếu nhập');
+        searchInput?.focus();
+        return;
+      }
+
+      // Khi Hoàn thành: validate Serial cho các mặt hàng có has_serial = true
+      if (status === 'COMPLETED') {
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i];
+          if (it.has_serial && (!it.program_code || !it.program_code.trim())) {
+            alert(`Hàng hóa "${it.name}" quản lý theo Serial/Mã bộ nhưng chưa điền mã. Vui lòng điền mã Serial thực tế khi nhập kho, hoặc chọn "Lưu tạm" nếu hàng chưa về!`);
+            return;
+          }
+        }
+      }
+
+      const disc = Number(discountInput?.value.replace(/\D/g, '')) || 0;
+      const extra = Number(extraFeeInput?.value.replace(/\D/g, '')) || 0;
+      const otherFee = Number(otherFeeInput?.value.replace(/\D/g, '')) || 0;
+      const otherFeeNote = otherFeeNoteInput?.value.trim() || undefined;
+      const paid = Number(paidAmountInput?.value.replace(/\D/g, '')) || 0;
+      const payMethod = (document.querySelector('input[name="payment_method"]:checked') as HTMLInputElement)?.value || 'CASH';
+      const bankName = payMethod === 'BANK' ? (requireSelect('#bankNameSelect'))?.value : null;
+      const note = (document.getElementById('receiptNote') as HTMLTextAreaElement)?.value.trim() || undefined;
+      const invoiceNumber = invoiceNumberInput?.value.trim() || undefined;
+      const orderReceiptCode = orderReceiptCodeInput?.value.trim() || undefined;
+
+      const extraCategory = (requireSelect('#extraFeeCategorySelect'))?.value || null;
+      const otherCategory = (requireSelect('#otherFeeCategorySelect'))?.value || null;
+
+      const payload: any = {
+        request_id: purchaseRequestId,
+        action: editReceipt ? 'update' : undefined,
+        id: editReceipt ? editReceipt.id : undefined,
+        supplier_id: supplierSelect.value ? Number(supplierSelect.value) : undefined,
+        supplier_name: supplierNameInput.value.trim() || undefined,
+        supplier_phone: supplierPhoneInput.value.trim() || undefined,
+        discount_cents: disc,
+        extra_fee_cents: extra,
+        extra_fee_category: extraCategory,
+        other_fee_cents: otherFee,
+        other_fee_category: otherCategory,
+        other_fee_note: otherFeeNote,
+        invoice_number: invoiceNumber,
+        order_receipt_code: orderReceiptCode,
+        paid_amount_cents: paid,
+        payment_method: payMethod,
+        bank_name: bankName,
+        note: note,
+        receipt_status: status,
+        items: items.map((it) => ({
+          product_id: it.product_id,
+          product_type_id: it.product_type_id ?? null,
+          condition: it.condition,
+          program_code: it.has_serial ? it.program_code : null,
+          quantity: it.quantity,
+          unit_cost_cents: it.unit_cost_cents,
+          discount_cents: it.discount_cents,
+          item_note: it.note
+        }))
+      };
+
+      if (receiptStatusBadge) {
+        receiptStatusBadge.textContent = status === 'DRAFT' ? 'Phiếu tạm' : 'Hoàn thành';
+        receiptStatusBadge.className = status === 'DRAFT' 
+          ? 'px-2 py-0.5 rounded font-bold text-[11px] bg-amber-100 text-amber-800'
+          : 'px-2 py-0.5 rounded font-bold text-[11px] bg-emerald-100 text-emerald-800';
+      }
+
+      purchasePayload.value = JSON.stringify(payload);
+      purchaseForm.submit();
+    }
+
+    saveDraftBtn?.addEventListener('click', () => handleSave('DRAFT'));
+    saveCompleteBtn?.addEventListener('click', () => handleSave('COMPLETED'));
+
+    // Nạp dữ liệu phiếu cũ nếu đang trong chế độ Sửa (editReceipt)
+    if (editReceipt) {
+      paidAmountInput.readOnly = true;
+      if (saveCompleteBtn) saveCompleteBtn.hidden = true;
+      if (receiptCode) receiptCode.value = editReceipt.receipt_code || '';
+      if (orderReceiptCodeInput) orderReceiptCodeInput.value = editReceipt.order_receipt_code || '';
+      if (invoiceNumberInput) invoiceNumberInput.value = editReceipt.invoice_number || '';
+      if (discountInput) discountInput.value = formatVND(editReceipt.discount_cents || 0);
+      if (extraFeeInput) extraFeeInput.value = formatVND(editReceipt.extra_fee_cents || 0);
+      if (otherFeeInput) otherFeeInput.value = formatVND(editReceipt.other_fee_cents || 0);
+      if (otherFeeNoteInput) otherFeeNoteInput.value = editReceipt.other_fee_note || '';
+      if (paidAmountInput) {
+        paidAmountInput.value = formatVND(editReceipt.paid_amount_cents || 0);
+        paidAmountInput.dataset.manual = '1';
+      }
+      const noteInput = document.getElementById('receiptNote') as HTMLTextAreaElement | null;
+      if (noteInput) noteInput.value = editReceipt.note || '';
+
+      const extraCatSel = requireSelect('#extraFeeCategorySelect');
+      if (extraCatSel && editReceipt.extra_fee_category) extraCatSel.value = editReceipt.extra_fee_category;
+
+      const otherCatSel = requireSelect('#otherFeeCategorySelect');
+      if (otherCatSel && editReceipt.other_fee_category) otherCatSel.value = editReceipt.other_fee_category;
+
+      if (editReceipt.supplier_id && supplierSelect) {
+        supplierSelect.value = String(editReceipt.supplier_id);
+        supplierNameInput.value = editReceipt.supplier_name || '';
+        supplierPhoneInput.value = editReceipt.supplier_phone || '';
+      }
+
+      if (editReceipt.items && Array.isArray(editReceipt.items)) {
+        items = editReceipt.items.map((it: any) => ({
+          product_id: it.product_id,
+          product_type_id: it.product_type_id ?? null,
+          name: it.product_name,
+          product_code: it.product_code,
+          has_serial: it.has_serial === 1 || it.tracking_mode === 'CODE',
+          unit_name: it.unit_name || 'Cái',
+          condition: it.condition || 'NEW',
+          program_code: it.program_code || it.unit_program_code || '',
+          quantity: it.quantity || 1,
+          unit_cost_cents: it.unit_cost_cents || 0,
+          discount_cents: it.discount_cents || 0,
+          note: it.item_note || ''
+        }));
+        renderTable();
+      }
+    }
+  </script>
+</AdminLayout>

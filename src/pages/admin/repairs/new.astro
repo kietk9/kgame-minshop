@@ -1,0 +1,455 @@
+---
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import { env } from 'cloudflare:workers';
+
+export const prerender = false;
+
+const error = Astro.url.searchParams.get('error');
+
+// 1. Lấy toàn bộ danh sách khách hàng để chọn
+const { results: allCustomers } = await env.DB.prepare(`
+  SELECT id, customer_code, name, phone, address 
+  FROM customers 
+  ORDER BY name ASC
+`).all<any>();
+
+// 2. Lấy danh sách sản phẩm và phân loại để chọn
+const { results: rawProducts } = await env.DB.prepare(`
+  SELECT p.id AS product_id, p.name AS product_name, p.product_code,
+         pt.id AS type_id, pt.name AS type_name, pt.sale_price_cents
+  FROM products p
+  JOIN product_types pt ON p.id = pt.product_id
+  ORDER BY p.name ASC, pt.sort_order ASC
+`).all<any>();
+
+// 3. Lấy danh sách mã bộ gần đây
+const { results: recentUnits } = await env.DB.prepare(`
+  SELECT pu.id, pu.program_code, pt.name AS type_name, p.name AS product_name
+  FROM product_units pu
+  JOIN product_types pt ON pu.product_type_id = pt.id
+  JOIN products p ON pt.product_id = p.id
+  ORDER BY pu.id DESC LIMIT 40
+`).all<any>();
+---
+
+<AdminLayout title="Tiếp nhận máy sửa mới" active="repairs">
+  <div class="mx-auto max-w-4xl space-y-6">
+    <!-- Header -->
+    <div class="flex items-center justify-between">
+      <div>
+        <a href="/admin/repairs" class="text-xs font-semibold text-zinc-500 hover:text-zinc-800">
+          ← Quay lại danh sách phiếu sửa
+        </a>
+        <h1 class="mt-1 text-2xl font-bold tracking-tight text-ink sm:text-3xl">Tiếp nhận máy sửa chữa & bảo hành</h1>
+        <p class="mt-1 text-sm text-zinc-500">
+          Lập phiếu tiếp nhận thiết bị từ khách hàng hoặc điều chuyển máy nội bộ KGAME để kỹ thuật xử lý.
+        </p>
+      </div>
+    </div>
+
+    {error && (
+      <div class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-800">
+        ⚠️ {error}
+      </div>
+    )}
+
+    <form method="POST" action="/api/admin/repairs" class="space-y-6">
+      <!-- 1. Phân loại chủ sở hữu thiết bị -->
+      <div class="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <h2 class="text-base font-semibold text-zinc-900 mb-4 flex items-center gap-2">
+          <span class="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-900 text-xs font-bold text-white">1</span>
+          Nguồn gốc thiết bị
+        </h2>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <label class="relative flex cursor-pointer rounded-xl border p-4 shadow-sm hover:border-zinc-400 focus:outline-none border-zinc-300 has-[:checked]:border-zinc-900 has-[:checked]:ring-2 has-[:checked]:ring-zinc-900/10 has-[:checked]:bg-zinc-50/50">
+            <input type="radio" name="owner_type" value="CUSTOMER" checked class="sr-only" id="owner-customer" onchange="toggleOwner(this.value)" />
+            <div class="flex flex-col">
+              <span class="block text-sm font-bold text-zinc-900">👤 Hàng của Khách hàng</span>
+              <span class="mt-1 text-xs text-zinc-500">Máy khách mang tới sửa chữa, bảo dưỡng hoặc gia hạn key. Không tính vào kho khả dụng của shop.</span>
+            </div>
+          </label>
+
+          <label class="relative flex cursor-pointer rounded-xl border p-4 shadow-sm hover:border-zinc-400 focus:outline-none border-zinc-300 has-[:checked]:border-purple-600 has-[:checked]:ring-2 has-[:checked]:ring-purple-600/10 has-[:checked]:bg-purple-50/30">
+            <input type="radio" name="owner_type" value="KGAME" class="sr-only" id="owner-kgame" onchange="toggleOwner(this.value)" />
+            <div class="flex flex-col">
+              <span class="block text-sm font-bold text-purple-950">🏢 Hàng của KGAME (Kho nội bộ)</span>
+              <span class="mt-1 text-xs text-zinc-500">Máy trong kho bị lỗi, máy thu mua cũ cần sửa chữa tân trang trước khi tái xuất bán.</span>
+            </div>
+          </label>
+        </div>
+
+        <!-- Thông tin khách hàng -->
+        <div id="customer-info-section" class="mt-6 border-t border-zinc-100 pt-5 space-y-4">
+          <div class="rounded-lg bg-zinc-50 p-3.5 border border-zinc-200">
+            <label class="block text-xs font-bold text-zinc-800 mb-1">
+              🔎 Chọn nhanh từ danh bạ khách hàng sẵn có (hoặc nhập mới bên dưới)
+            </label>
+            <select
+              id="customer_select"
+              name="customer_id"
+              class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm focus:border-zinc-900 focus:outline-none"
+              onchange="onCustomerSelectChange(this)"
+            >
+              <option value="">-- Chọn khách hàng sẵn có (Tên, SĐT, Địa chỉ sẽ tự động điền) --</option>
+              {(allCustomers ?? []).map((c) => (
+                <option
+                  value={c.id}
+                  data-name={c.name}
+                  data-phone={c.phone}
+                  data-address={c.address || ''}
+                >
+                  {c.name} — {c.phone} {c.address ? `(${c.address})` : '• (Chưa có địa chỉ)'}
+                </option>
+              ))}
+              <option value="NEW">+ Nhập khách hàng mới...</option>
+            </select>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">
+                Tên khách hàng <span class="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                name="customer_name"
+                id="customer_name_input"
+                placeholder="VD: Anh Tuấn Biên Hòa"
+                class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-900 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">
+                Số điện thoại liên hệ <span class="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                name="customer_phone"
+                id="customer_phone_input"
+                placeholder="09xx..."
+                class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm font-normal focus:border-zinc-900 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-zinc-700">
+              Địa chỉ khách hàng <span class="text-zinc-400 font-normal">(Nếu khách cũ chưa có địa chỉ, nhập tại đây để tự động cập nhật lưu vào danh bạ)</span>
+            </label>
+            <input
+              type="text"
+              name="customer_address"
+              id="customer_address_input"
+              placeholder="VD: 123 Lê Lợi, P. Tân Phong, TP. Biên Hòa, Đồng Nai"
+              class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-900 focus:outline-none"
+            />
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Thông tin máy & Nhận diện -->
+      <div class="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <h2 class="text-base font-semibold text-zinc-900 mb-4 flex items-center gap-2">
+          <span class="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-900 text-xs font-bold text-white">2</span>
+          Định danh thiết bị tiếp nhận
+        </h2>
+
+        <div class="space-y-4">
+          <!-- Tra cứu nhanh theo mã bộ Program Code -->
+          <div class="rounded-lg border border-amber-200 bg-amber-50/40 p-4">
+            <label class="block text-xs font-bold text-amber-900">
+              🔑 Mã bộ máy (Program Code) — <span class="font-normal text-amber-700">Nếu có tem mã bộ dán trên máy</span>
+            </label>
+            <input
+              type="text"
+              name="program_code"
+              id="program_code_input"
+              list="units-datalist"
+              placeholder="VD: 777-62020834..."
+              class="mt-1.5 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-normal text-amber-950 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+            />
+            <datalist id="units-datalist">
+              {(recentUnits ?? []).map((u) => (
+                <option value={u.program_code}>{u.product_name} - {u.type_name}</option>
+              ))}
+            </datalist>
+            <p class="mt-1 text-[11px] text-amber-800">
+              Hệ thống sẽ tự động tra cứu hồ sơ linh kiện, nhà sản xuất và lịch sử sửa chữa của máy này.
+            </p>
+          </div>
+
+          <!-- Hoặc chọn theo danh mục sản phẩm -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">Mặt hàng / Phiên bản trong danh mục</label>
+              <select
+                name="product_type_id"
+                id="product_type_select"
+                class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-900 focus:outline-none"
+              >
+                <option value="">-- Chọn mặt hàng nếu đã biết --</option>
+                {(rawProducts ?? []).map((p) => (
+                  <option value={p.type_id} data-product-id={p.product_id}>
+                    {p.product_name} — {p.type_name} ({p.product_code})
+                  </option>
+                ))}
+              </select>
+              <input type="hidden" name="product_id" id="hidden_product_id" value="" />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">Tên thiết bị (nếu máy ngoài chưa có danh mục)</label>
+              <input
+                type="text"
+                name="unidentified_product_name"
+                placeholder="VD: Bo máy bắn cá đại dương 8 tay..."
+                class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-900 focus:outline-none"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Tình trạng lỗi & Phụ kiện nhận kèm -->
+      <div class="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <h2 class="text-base font-semibold text-zinc-900 mb-4 flex items-center gap-2">
+          <span class="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-900 text-xs font-bold text-white">3</span>
+          Hiện tượng lỗi & Phụ kiện kèm theo
+        </h2>
+
+        <div class="space-y-4">
+          <div>
+            <label class="block text-xs font-bold text-zinc-900">
+              Hiện tượng / Lỗi máy <span class="text-red-500">* (Bắt buộc)</span>
+            </label>
+            <textarea
+              name="problem_reported"
+              rows="3"
+              required
+              placeholder="VD: Máy mở không lên hình, quạt nguồn quay nhưng màn hình đen, hoặc máy báo chu kỳ khóa..."
+              class="mt-1.5 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-900 focus:outline-none"
+            ></textarea>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">Phụ kiện nhận kèm khi tiếp nhận</label>
+              <input
+                type="text"
+                name="accessories_received"
+                placeholder="VD: 1 Thùng máy CPU, 1 Dây nguồn, 1 USB Key..."
+                class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-900 focus:outline-none"
+              />
+              <span class="text-[11px] text-zinc-500">Giúp kiểm soát tránh thất lạc phụ kiện của khách và in lên phiếu tiếp nhận.</span>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">Chẩn đoán sơ bộ ban đầu (nếu có)</label>
+              <input
+                type="text"
+                name="diagnosis"
+                placeholder="VD: Nghi lỗi nguồn 12V hoặc chết RAM..."
+                class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-900 focus:outline-none"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. Kế hoạch xử lý (Nội bộ / Gửi đối tác) -->
+      <div class="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <h2 class="text-base font-semibold text-zinc-900 mb-4 flex items-center gap-2">
+          <span class="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-900 text-xs font-bold text-white">4</span>
+          Phương án xử lý & Báo giá
+        </h2>
+
+        <div class="space-y-4">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label class="relative flex cursor-pointer rounded-xl border p-4 shadow-sm border-zinc-300 has-[:checked]:border-zinc-900 has-[:checked]:bg-zinc-50">
+              <input type="radio" name="repair_location" value="INTERNAL" checked class="sr-only" onchange="toggleLocation(this.value)" />
+              <div>
+                <span class="block text-sm font-bold text-zinc-900">🏠 Sửa chữa nội bộ tại xưởng</span>
+                <span class="mt-1 text-xs text-zinc-500">Kỹ thuật viên KGAME trực tiếp thay linh kiện, chạy phần mềm hoặc test máy.</span>
+              </div>
+            </label>
+
+            <label class="relative flex cursor-pointer rounded-xl border p-4 shadow-sm border-zinc-300 has-[:checked]:border-rose-600 has-[:checked]:bg-rose-50/40">
+              <input type="radio" name="repair_location" value="EXTERNAL" class="sr-only" onchange="toggleLocation(this.value)" />
+              <div>
+                <span class="block text-sm font-bold text-rose-950">🚚 Gửi đối tác / Thợ ngoài sửa</span>
+                <span class="mt-1 text-xs text-zinc-500">Chuyển máy tới đơn vị chuyên sửa bo mạch, thợ hàn chip hoặc hãng bảo hành.</span>
+              </div>
+            </label>
+          </div>
+
+          <!-- Chi tiết khi gửi đối tác -->
+          <div id="partner-details-section" class="hidden rounded-lg border border-rose-200 bg-rose-50/30 p-4 space-y-3">
+            <div class="font-bold text-xs text-rose-900 uppercase tracking-wide">
+              Thông tin theo dõi gửi đối tác
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label class="block text-xs font-semibold text-zinc-700">Đơn vị / Thợ nhận sửa</label>
+                <input
+                  type="text"
+                  name="external_partner"
+                  placeholder="VD: Bác Ba Điện Tử, Nguyễn Hưng..."
+                  class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm bg-white focus:border-rose-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-zinc-700">Ngày gửi đi</label>
+                <input
+                  type="date"
+                  name="sent_partner_at"
+                  value={new Date().toISOString().split('T')[0]}
+                  class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm bg-white focus:border-rose-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-zinc-700">Ngày dự kiến nhận về</label>
+                <input
+                  type="date"
+                  name="expected_receive_at"
+                  class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm bg-white focus:border-rose-500 focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- Giá & Ngày hẹn trả khách -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">Giá dự kiến thu khách (VNĐ)</label>
+              <input
+                type="text"
+                name="repair_price"
+                placeholder="0"
+                class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm font-normal tabular-nums focus:border-zinc-900 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">Ngày hẹn trả khách</label>
+              <input
+                type="date"
+                name="expected_return_at"
+                class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-900 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-zinc-700">Kỹ thuật viên phụ trách</label>
+              <input
+                type="text"
+                name="assigned_to"
+                placeholder="VD: Kiên, Hùng..."
+                class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-900 focus:outline-none"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="flex items-center justify-end gap-3 pt-4">
+        <a
+          href="/admin/repairs"
+          class="rounded-lg border border-zinc-300 px-5 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+        >
+          Hủy bỏ
+        </a>
+        <button
+          type="submit"
+          class="rounded-lg bg-zinc-900 px-6 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-zinc-800"
+        >
+          ✓ Tạo phiếu & Tiếp nhận thiết bị
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <script is:inline>
+    function toggleOwner(val) {
+      const custSec = document.getElementById('customer-info-section');
+      if (val === 'KGAME') {
+        custSec.classList.add('hidden');
+      } else {
+        custSec.classList.remove('hidden');
+      }
+    }
+
+    function toggleLocation(val) {
+      const partSec = document.getElementById('partner-details-section');
+      if (val === 'EXTERNAL') {
+        partSec.classList.remove('hidden');
+      } else {
+        partSec.classList.add('hidden');
+      }
+    }
+
+    function onCustomerSelectChange(sel) {
+      const nameInput = document.getElementById('customer_name_input');
+      const phoneInput = document.getElementById('customer_phone_input');
+      const addrInput = document.getElementById('customer_address_input');
+
+      if (!sel.value || sel.value === 'NEW') {
+        if (sel.value === 'NEW') {
+          nameInput.value = '';
+          phoneInput.value = '';
+          addrInput.value = '';
+          nameInput.focus();
+        }
+        return;
+      }
+
+      const opt = sel.options[sel.selectedIndex];
+      if (opt) {
+        if (opt.dataset.name) nameInput.value = opt.dataset.name;
+        if (opt.dataset.phone) phoneInput.value = opt.dataset.phone;
+        if (opt.dataset.address) {
+          addrInput.value = opt.dataset.address;
+        } else {
+          addrInput.value = '';
+          addrInput.placeholder = 'Khách chưa có địa chỉ, nhập tại đây để lưu lại';
+        }
+      }
+    }
+
+    // Tự động map product_id khi chọn type
+    const selectType = document.getElementById('product_type_select');
+    const hiddenProd = document.getElementById('hidden_product_id');
+    if (selectType && hiddenProd) {
+      selectType.addEventListener('change', (e) => {
+        const opt = selectType.selectedOptions[0];
+        if (opt && opt.dataset.productId) {
+          hiddenProd.value = opt.dataset.productId;
+        }
+      });
+    }
+
+    // Tự động chuẩn hóa địa chỉ dán vào
+    const repairAddrInput = document.getElementById('customer_address_input');
+    repairAddrInput?.addEventListener('paste', (e) => {
+      const pasted = e.clipboardData?.getData('text');
+      if (pasted && pasted.length > 8) {
+        setTimeout(async () => {
+          try {
+            const res = await fetch(`/api/admin/geo?type=parse&text=${encodeURIComponent(pasted.trim())}`);
+            const json = await res.json();
+            if (json.success && json.data) {
+              const { province, ward, detail } = json.data;
+              if (province || ward) {
+                repairAddrInput.value = [detail, ward, province].filter(Boolean).join(', ');
+              }
+            }
+          } catch {}
+        }, 50);
+      }
+    });
+  </script>
+</AdminLayout>

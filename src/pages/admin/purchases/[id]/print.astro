@@ -1,0 +1,259 @@
+---
+import { env } from 'cloudflare:workers';
+import { getPurchaseReceiptById } from '../../../../features/kgame/db';
+
+export const prerender = false;
+
+const idParam = Astro.params.id;
+const receiptId = Number(idParam);
+
+if (!receiptId || isNaN(receiptId)) {
+  return Astro.redirect('/admin/purchases');
+}
+
+const receipt = await getPurchaseReceiptById(env.DB, receiptId);
+
+if (!receipt) {
+  return Astro.redirect('/admin/purchases?error=not_found');
+}
+
+function formatVND(cents: number) {
+  if (!cents || isNaN(cents)) return '0';
+  return new Intl.NumberFormat('en-US').format(cents);
+}
+---
+
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>Phiếu Nhập Hàng - {receipt.receipt_code}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 12mm 15mm;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 13px;
+      line-height: 1.4;
+      color: #111;
+      margin: 0;
+      padding: 20px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      border-bottom: 2px solid #333;
+      padding-bottom: 12px;
+      margin-bottom: 16px;
+    }
+    .company-title {
+      font-size: 18px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .receipt-title {
+      text-align: center;
+      margin: 15px 0 20px 0;
+    }
+    .receipt-title h1 {
+      margin: 0;
+      font-size: 22px;
+      text-transform: uppercase;
+      font-weight: 800;
+    }
+    .meta-box {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 16px;
+      padding: 10px;
+      border: 1px dashed #bbb;
+      border-radius: 4px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 16px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 7px 8px;
+      font-size: 12px;
+    }
+    th {
+      background: #f5f5f5;
+      font-weight: bold;
+      text-align: left;
+    }
+    .text-center { text-align: center; }
+    .text-right { text-align: right; }
+    .font-mono { font-family: monospace; }
+    .font-bold { font-weight: bold; }
+    .summary-box {
+      margin-left: auto;
+      width: 320px;
+      border-collapse: collapse;
+    }
+    .summary-box td {
+      border: none;
+      padding: 4px 6px;
+    }
+    .signatures {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 40px;
+      text-align: center;
+      page-break-inside: avoid;
+    }
+    .sig-col {
+      width: 28%;
+    }
+    .sig-col .title {
+      font-weight: bold;
+      margin-bottom: 50px;
+    }
+    @media print {
+      body { padding: 0; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Print toolbar -->
+  <div class="no-print" style="margin-bottom: 20px; display: flex; gap: 10px; justify-content: flex-end;">
+    <button onclick="window.print()" style="background: #2563eb; color: #fff; border: none; padding: 8px 16px; font-weight: bold; border-radius: 6px; cursor: pointer;">
+      🖨️ In phiếu ngay
+    </button>
+    <button onclick="window.close()" style="background: #e5e7eb; border: none; padding: 8px 16px; font-weight: bold; border-radius: 6px; cursor: pointer;">
+      Đóng
+    </button>
+  </div>
+
+  <div class="header">
+    <div>
+      <div class="company-title">KGAME LINH KIỆN &amp; MÁY GAME</div>
+      <div style="font-size: 11px; color: #555;">Chuyên bo mạch, máy bắn cá, linh kiện điện tử</div>
+      <div style="font-size: 11px; color: #555;">Hotline / Zalo: 0900.000.000</div>
+    </div>
+    <div style="text-align: right;">
+      <div style="font-weight: bold; font-family: monospace; font-size: 15px;">{receipt.receipt_code}</div>
+      <div style="font-size: 11px; color: #666;">Ngày: {new Date(receipt.created_at).toLocaleDateString('vi-VN')}</div>
+    </div>
+  </div>
+
+  <div class="receipt-title">
+    <h1>PHIẾU NHẬP HÀNG HÓA</h1>
+    <div style="font-size: 12px; color: #666;">(KiotViet Standard Goods Receipt)</div>
+  </div>
+
+  <div class="meta-box">
+    <div>
+      <div><strong>Nhà cung cấp / Bán lại:</strong> {receipt.supplier_name || 'Khách lẻ / Thu mua ngoài'}</div>
+      <div><strong>Điện thoại:</strong> {receipt.supplier_phone || '--'}</div>
+      <div><strong>Địa chỉ:</strong> {receipt.supplier_address || '--'}</div>
+    </div>
+    <div>
+      <div><strong>Nhân viên nhập:</strong> Kỹ thuật Kgame</div>
+      <div><strong>Kho nhận:</strong> Kho tổng Kgame</div>
+      <div><strong>Ghi chú:</strong> {receipt.note || '--'}</div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th class="text-center" style="width: 30px;">STT</th>
+        <th style="width: 80px;">Mã hàng</th>
+        <th>Tên hàng hóa &amp; Phân loại</th>
+        <th class="text-center" style="width: 60px;">Tình trạng</th>
+        <th style="width: 110px;">Serial / Mã bộ</th>
+        <th class="text-center" style="width: 40px;">ĐVT</th>
+        <th class="text-center" style="width: 40px;">SL</th>
+        <th class="text-right" style="width: 85px;">Đơn giá</th>
+        <th class="text-right" style="width: 90px;">Thành tiền</th>
+      </tr>
+    </thead>
+    <tbody>
+      {receipt.items.map((it: any, idx: number) => {
+        const lineTotal = it.quantity * it.unit_cost_cents - (it.discount_cents || 0);
+        const serial = it.program_code || it.unit_program_code;
+        return (
+          <tr>
+            <td class="text-center font-mono">{idx + 1}</td>
+            <td class="font-mono">{it.product_code || '--'}</td>
+            <td>
+              <strong>{it.product_name}</strong>
+              {it.type_name && it.type_name !== 'Tiêu chuẩn' && (
+                <span style="color: #666; font-size: 11px;"> - {it.type_name}</span>
+              )}
+            </td>
+            <td class="text-center">
+              {it.condition === 'NEW' ? 'Mới' : 'Cũ'}
+            </td>
+            <td class="font-mono font-bold" style="color: #1e40af;">
+              {serial || '--'}
+            </td>
+            <td class="text-center">{it.unit_name || 'Cái'}</td>
+            <td class="text-center font-bold font-mono">{it.quantity}</td>
+            <td class="text-right font-mono">{formatVND(it.unit_cost_cents)}</td>
+            <td class="text-right font-mono font-bold">{formatVND(lineTotal)}</td>
+          </tr>
+        );
+      })}
+    </tbody>
+  </table>
+
+  <div style="display: flex; justify-content: flex-end;">
+    <table class="summary-box">
+      <tr>
+        <td class="text-right">Tổng tiền hàng:</td>
+        <td class="text-right font-mono font-bold">{formatVND(receipt.subtotal_cents || receipt.total_cents)}</td>
+      </tr>
+      {receipt.discount_cents > 0 && (
+        <tr>
+          <td class="text-right">Giảm giá:</td>
+          <td class="text-right font-mono text-emerald-600">-{formatVND(receipt.discount_cents)}</td>
+        </tr>
+      )}
+      {receipt.extra_fee_cents > 0 && (
+        <tr>
+          <td class="text-right">Chi phí khác:</td>
+          <td class="text-right font-mono">+{formatVND(receipt.extra_fee_cents)}</td>
+        </tr>
+      )}
+      <tr style="border-top: 1px solid #333;">
+        <td class="text-right font-bold">Tổng cần trả NCC:</td>
+        <td class="text-right font-mono font-bold" style="font-size: 14px;">{formatVND(receipt.total_cents)}</td>
+      </tr>
+      <tr>
+        <td class="text-right">Tiền đã thanh toán:</td>
+        <td class="text-right font-mono font-bold">{formatVND(receipt.paid_amount_cents || 0)}</td>
+      </tr>
+      {receipt.debt_amount_cents > 0 && (
+        <tr>
+          <td class="text-right" style="color: #b45309;">Còn nợ lại NCC:</td>
+          <td class="text-right font-mono font-bold" style="color: #b45309;">{formatVND(receipt.debt_amount_cents)}</td>
+        </tr>
+      )}
+    </table>
+  </div>
+
+  <div class="signatures">
+    <div class="sig-col">
+      <div class="title">Người giao hàng / Bán</div>
+      <div style="font-style: italic; color: #777;">(Ký, ghi rõ họ tên)</div>
+    </div>
+    <div class="sig-col">
+      <div class="title">Người nhận / Thủ kho</div>
+      <div style="font-style: italic; color: #777;">(Ký, ghi rõ họ tên)</div>
+    </div>
+    <div class="sig-col">
+      <div class="title">Kế toán / Phụ trách</div>
+      <div style="font-style: italic; color: #777;">(Ký, ghi rõ họ tên)</div>
+    </div>
+  </div>
+</body>
+</html>

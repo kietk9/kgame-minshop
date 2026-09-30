@@ -1,0 +1,685 @@
+
+> minshop@0.1.0 verify
+> npm run theme:sync && vitest run && astro check && npm run theme:check && astro build && node scripts/check-built-css.mjs && npm run test:integration && node --experimental-strip-types scripts/check-stripe-countries.mjs && npm run mcp:check && npm run scaffold:check
+
+
+> minshop@0.1.0 theme:sync
+> node scripts/theme-sync.mjs
+
+themes: default, market, studio — active for this process: default (from theme.config.json)
+
+ RUN  v4.1.10 <HANDOFF_WORKSPACE>/outputs/KGAME_LINUX_HANDOVER_2026-09-29/project
+
+
+ Test Files  86 passed (86)
+      Tests  952 passed (952)
+   Start at  19:23:05
+   Duration  2.57s (transform 3.23s, setup 0ms, import 5.98s, tests 2.74s, environment 5ms)
+
+19:23:09 [@astrojs/cloudflare] Enabling sessions with Cloudflare KV with the "SESSION" KV binding.
+19:23:09 [types] Generated 52ms
+19:23:09 [check] Getting diagnostics for Astro files in <HANDOFF_WORKSPACE>/outputs/KGAME_LINUX_HANDOVER_2026-09-29/project...
+create-minshop/src/scaffold.js:1:30 - warning ts(6133): 'readdirSync' is declared but its value is never read.
+
+1 import { cpSync, existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+                               ~~~~~~~~~~~
+
+src/components/admin/PartnerModal.astro:208:9 - warning astro(4000): This script will be treated as if it has the `is:inline` directive because it contains an attribute. Therefore, features that require processing (e.g. using TypeScript or npm packages in the script) are unavailable.
+
+See docs for more details: https://docs.astro.build/en/guides/client-side-scripts/#script-processing.
+
+Add the `is:inline` directive explicitly to silence this hint.
+
+208 <script define:vars={{ modalId }}>
+            ~~~~~~~~~~~
+
+src/components/admin/PayDebtModal.astro:271:49 - warning ts(6133): 'idx' is declared but its value is never read.
+
+271       docsBody.innerHTML = unpaidDocs.map((doc, idx) => {
+                                                    ~~~
+
+src/components/admin/QuickProductModal.astro:549:18 - warning ts(6387): The signature '(commandId: string, showUI?: boolean | undefined, value?: string | undefined): boolean' of 'document.execCommand' is deprecated.
+
+549         document.execCommand(cmd, false, undefined);
+                     ~~~~~~~~~~~
+
+src/pages/checkout.astro:293:23 - warning ts(6133): 'result' is declared but its value is never read.
+
+293                 const result = await provider.createCheckout({
+                          ~~~~~~
+
+src/pages/admin/login.astro:60:11 - warning ts(6133): 'identity' is declared but its value is never read.
+
+60     const identity = await resolveStaff(env.DB,staff,cred.tagSource);
+             ~~~~~~~~
+
+src/pages/admin/sale.astro:2322:81 - warning ts(6133): 'e' is declared but its value is never read.
+
+2322       document.getElementById('enableCodCheckbox')?.addEventListener('change', (e) => {
+                                                                                     ~
+src/pages/admin/sale.astro:1084:82 - warning ts(6133): 'senderInfo' is declared but its value is never read.
+
+1084       const { products, productTypes, inStockUnits, customers, deliveryPartners, senderInfo, initialPreorderData, authority } = window.POS_DATA;
+                                                                                      ~~~~~~~~~~
+src/pages/admin/sale.astro:1084:64 - warning ts(6133): 'deliveryPartners' is declared but its value is never read.
+
+1084       const { products, productTypes, inStockUnits, customers, deliveryPartners, senderInfo, initialPreorderData, authority } = window.POS_DATA;
+                                                                    ~~~~~~~~~~~~~~~~
+
+src/pages/admin/buybacks/new.astro:315:25 - warning ts(6133): 'defaultUnitId' is declared but its value is never read.
+
+315     function addItemRow(defaultUnitId?: number) {
+                            ~~~~~~~~~~~~~
+
+src/pages/admin/inventory/outbound/new.astro:244:11 - warning astro(4000): This script will be treated as if it has the `is:inline` directive because it contains an attribute. Therefore, features that require processing (e.g. using TypeScript or npm packages in the script) are unavailable.
+
+See docs for more details: https://docs.astro.build/en/guides/client-side-scripts/#script-processing.
+
+Add the `is:inline` directive explicitly to silence this hint.
+
+244   <script define:vars={{ products, inStockUnits, canViewCost, productTypes }}>
+              ~~~~~~~~~~~
+
+src/pages/admin/orders/index.astro:14:17 - warning ts(6133): 'total' is declared but its value is never read.
+
+14 const { orders, total } = await listPosOrders(env.DB, {
+                   ~~~~~
+
+src/pages/admin/production/new.astro:37:7 - warning ts(6133): 'formatVnd' is declared but its value is never read.
+
+37 const formatVnd = formatNumber;
+         ~~~~~~~~~
+src/pages/admin/production/new.astro:268:9 - warning astro(4000): This script will be treated as if it has the `is:inline` directive because it contains an attribute. Therefore, features that require processing (e.g. using TypeScript or npm packages in the script) are unavailable.
+
+See docs for more details: https://docs.astro.build/en/guides/client-side-scripts/#script-processing.
+
+Add the `is:inline` directive explicitly to silence this hint.
+
+268 <script define:vars={{ outputTypes, components }}>
+            ~~~~~~~~~~~
+
+src/pages/admin/products/index.astro:164:10 - warning ts(6133): 'formatVnd' is declared but its value is never read.
+
+164 function formatVnd(cents: number) {
+             ~~~~~~~~~
+src/pages/admin/products/index.astro:162:7 - warning ts(6133): 'formatPlainNumber' is declared but its value is never read.
+
+162 const formatPlainNumber = formatNumber;
+          ~~~~~~~~~~~~~~~~~
+src/pages/admin/products/index.astro:153:14 - warning ts(6133): 'u' is declared but its value is never read.
+
+153   for (const u of (directUnits ?? [])) {
+                 ~
+src/pages/admin/products/index.astro:148:9 - warning ts(6133): 'placeholders' is declared but its value is never read.
+
+148   const placeholders = productIds.map(() => '?').join(',');
+            ~~~~~~~~~~~~
+src/pages/admin/products/index.astro:146:5 - warning ts(6133): 'unitsByProduct' is declared but its value is never read.
+
+146 let unitsByProduct: Record<number, any[]> = {};
+        ~~~~~~~~~~~~~~
+src/pages/admin/products/index.astro:1051:11 - warning ts(6133): 'colMenuWrapper' is declared but its value is never read.
+
+1051     const colMenuWrapper = document.getElementById('col-customizer-wrapper');
+               ~~~~~~~~~~~~~~
+src/pages/admin/products/index.astro:772:105 - warning ts(6385): 'event' is deprecated.
+
+772                       <td class="px-3.5 py-3 text-center whitespace-nowrap" data-col="actions" onclick="event.stopPropagation()">
+                                                                                                            ~~~~~
+src/pages/admin/products/index.astro:677:36 - warning ts(6385): 'event' is deprecated.
+
+677                           onclick="event.stopPropagation()"
+                                       ~~~~~
+src/pages/admin/products/index.astro:658:68 - warning ts(6385): 'event' is deprecated.
+
+658                       <td class="px-3.5 py-3 text-center" onclick="event.stopPropagation()">
+                                                                       ~~~~~
+
+src/pages/admin/purchases/index.astro:267:100 - warning ts(6385): 'event' is deprecated.
+
+267                       {r.pending_refund_cents > 0 && <a href={`/admin/purchases/${r.id}`} onclick="event.stopPropagation()" class="block text-xs text-amber-700">Chờ nhận hoàn: {formatVND(r.pending_refund_cents)}đ</a>}
+                                                                                                       ~~~~~
+src/pages/admin/purchases/index.astro:262:64 - warning ts(6385): 'event' is deprecated.
+
+262                     <td class="px-3 py-3 text-center" onclick="event.stopPropagation()">
+                                                                   ~~~~~
+
+src/pages/admin/purchases/new.astro:793:13 - warning ts(6133): 'otherFee' is declared but its value is never read.
+
+793       const otherFee = Number(otherFeeInput?.value.replace(/\D/g, '')) || 0;
+                ~~~~~~~~
+src/pages/admin/purchases/new.astro:367:11 - warning ts(6133): 'suppliers' is declared but its value is never read.
+
+367     const suppliers = (window as any).KGAME_SUPPLIERS || [];
+              ~~~~~~~~~
+src/pages/admin/purchases/new.astro:366:11 - warning ts(6133): 'productTypes' is declared but its value is never read.
+
+366     const productTypes = (window as any).KGAME_PRODUCT_TYPES || [];
+              ~~~~~~~~~~~~
+
+src/pages/admin/repairs/new.astro:427:46 - warning ts(6133): 'e' is declared but its value is never read.
+
+427       selectType.addEventListener('change', (e) => {
+                                                 ~
+
+src/pages/admin/repairs/[id]/index.astro:28:7 - warning ts(6133): 'isFullyPaid' is declared but its value is never read.
+
+28 const isFullyPaid = (ticket.repair_price_cents || 0) > 0 && totalCollected >= (ticket.repair_price_cents || 0);
+         ~~~~~~~~~~~
+src/pages/admin/repairs/[id]/index.astro:1254:7 - warning ts(7027): Unreachable code detected.
+
+1254       btnCash?.addEventListener('click', selectCash);
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1255       btnBank?.addEventListener('click', selectBank);
+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ ... 
+1284         }
+     ~~~~~~~~~
+1285       });
+     ~~~~~~~~~
+src/pages/admin/repairs/[id]/index.astro:1230:7 - warning ts(7027): Unreachable code detected.
+
+1230       const btnCash = document.getElementById('btnPayCash');
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1231       const btnBank = document.getElementById('btnPayBank');
+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ ... 
+1235       const chkPayPartner = document.getElementById('chkPayPartner');
+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1236       const partnerPayoutDetails = document.getElementById('partnerPayoutDetails');
+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/pages/admin/repairs/[id]/index.astro:149:89 - warning ts(7027): Unreachable code detected.
+
+ 149                 onclick="return confirm('Xác nhận hoàn tất và nhập máy lại kho KGAME?')"
+                                                                                             
+ 150                 class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700"
+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ ... 
+1285       });
+     ~~~~~~~~~
+1286     })();
+     ~~~~~~~~~
+
+src/pages/admin/repairs/[id]/print.astro:19:7 - warning ts(6133): 'config' is declared but its value is never read.
+
+19 const config = getConfig();
+         ~~~~~~
+src/pages/admin/repairs/[id]/print.astro:18:17 - warning ts(6133): 'items' is declared but its value is never read.
+
+18 const { ticket, items } = data;
+                   ~~~~~
+
+src/pages/admin/reports/daily.astro:51:7 - warning ts(6133): 'totalOrderPaid' is declared but its value is never read.
+
+51 const totalOrderPaid = orders.reduce((s, o) => s + (o.paid_amount_cents || 0), 0);
+         ~~~~~~~~~~~~~~
+
+Result (498 files): 
+- 0 errors
+- 0 warnings
+- 36 hints
+
+
+> minshop@0.1.0 theme:check
+> node scripts/check-themes.mjs
+
+storefront boundary: ok
+19:23:30 [@astrojs/cloudflare] Enabling sessions with Cloudflare KV with the "SESSION" KV binding.
+19:23:30 [types] Generated 38ms
+19:23:30 [build] output: "server"
+19:23:30 [build] mode: "server"
+19:23:30 [build] directory: <HANDOFF_WORKSPACE>/outputs/KGAME_LINUX_HANDOVER_2026-09-29/project/dist/
+19:23:30 [build] adapter: @astrojs/cloudflare
+19:23:30 [build] Collecting build info...
+19:23:30 [build] ✓ Completed in 77ms.
+19:23:30 [build] Building server entrypoints...
+Using secrets defined in .dev.vars
+19:23:30 [vite] ✓ built in 72ms
+Using secrets defined in .dev.vars
+19:23:31 [vite] ✓ built in 635ms
+19:23:31 [vite] ✓ built in 24ms
+19:23:31 [build] Rearranging server assets...
+19:23:31 [build] ✓ Completed in 773ms.
+19:23:31 [@astrojs/cloudflare] Injected immutable Cache-Control for /_astro/* into _headers.
+19:23:31 [build] Server built in 868ms
+19:23:31 [build] Complete!
+check-built-css: ok — active "default" present (7 sentinels), 2 inactive themes excluded, Admin isolated, across 3 stylesheets.
+
+> minshop@0.1.0 test:integration
+> node --experimental-strip-types test/integration/kgame-return-disposal.mjs && node --experimental-strip-types test/integration/kgame-stock-outbound.mjs && node --experimental-strip-types test/integration/kgame-staff-password.mjs && node --experimental-strip-types test/integration/kgame-staff-http.mjs && node --experimental-strip-types test/integration/kgame-staff.mjs && node --experimental-strip-types test/integration/kgame-pending-actions.mjs && node --experimental-strip-types test/integration/kgame-return-inspection.mjs && node --experimental-strip-types test/integration/kgame-customer-returns.mjs && node --experimental-strip-types test/integration/kgame-order-refunds.mjs && node --experimental-strip-types test/integration/kgame-financial.mjs && node --experimental-strip-types test/integration/kgame-pos.mjs && node --experimental-strip-types test/integration/kgame-debt.mjs && node --experimental-strip-types test/integration/kgame-refunds.mjs && node --experimental-strip-types test/integration/kgame-purchase-completion.mjs && node --experimental-strip-types test/integration/kgame-purchase-returns.mjs && node --experimental-strip-types test/integration/business-audit.mjs && node --experimental-strip-types test/integration/reservations.mjs && node --experimental-strip-types test/integration/refunds.mjs && node --experimental-strip-types test/integration/media.mjs && node --experimental-strip-types test/integration/menus.mjs && node --experimental-strip-types test/integration/guest-access.mjs && node --experimental-strip-types test/integration/shipping.mjs && bash test/integration/d1-integration.sh
+
+✓ RD01: partial/full disposal clears only held defective queue, preserves all money/stock/cost/report history and replays once
+✓ RD02: disposed original serial cannot be sold; no duplicate inventory deduction
+✓ RD03: pending/unconfirmed/invalid/excess requests and wrong serial custody fail without writes
+✓ RD04: concurrent partial disposals cannot exceed held goods; simultaneous replay writes once; final failure rolls back serial, counters and receipt
+✓ RD07: mixed restock, rejected, disposed and remaining inspection quantities stay independent
+✓ RD05: corrupted disposal counters cannot bypass source history
+✓ O01: outbound rejects invalid quantities and insufficient stock; retries are idempotent, concurrent writes cannot oversell, journal failure rolls back stock
+✓ W01: initial session restricted; invalid input changes nothing; personal password revokes every old session and old credential
+✓ W02: role-only edit preserves personal-password state; owner password reset requires replacement again
+✓ W03: wrong current passwords are rate-limited; valid replacement succeeds after lock expires
+✓ W04: simultaneous changes allow one success; replay on a revoked session cannot change credentials
+✓ W05: audit failure rolls back password, required-change flag and session deletion; disabled account cannot change password
+✓ H05: first login forces personal password; direct sales API blocked until change; body account ID and role cannot redirect credential update
+✓ H01: production-mode anonymous gate, owner account management and individual staff login work
+✓ H02: direct API calls, alternate form/JSON actions, configuration, unknown paths and cross-origin staff writes are denied
+✓ P01: default cashier cannot forge selling price, discount, credit or debt; denied writes leave orders unchanged and catalog cost is absent
+✓ H03: cashier completes sale, payment and preorder fulfillment; stock changes correctly and forged actor is replaced by signed-in staff identity
+✓ RD06: granted staff disposes rejected return through HTTP; viewer and foreign origin denied; actor trusted, history visible and original cost omitted
+✓ P02: owner custom grants override template, revoke sessions, enable allowed routes/actions and protect costs/reports; staff cannot self-grant
+✓ H04: role change and logout revoke sessions immediately; stale staff cookies cannot fall back to owner
+✓ S01: unique normalized logins, duplicate display names, hashed passwords and owner-only role management
+✓ S02: session expiry, tampering, owner credential rotation and server-side logout revoke access
+✓ S03: role changes, disabling and password resets revoke old sessions and credentials
+✓ S04: five failed passwords lock login for ten minutes; nonexistent accounts and unconfigured owner cannot log in
+✓ S05: account update and session revocation roll back when audit cannot be written
+✓ Q01: real partial refund and split inspection produce exact outstanding money and quantities
+✓ Q02: completed refund and inspection leave queue; rejected goods remain visible
+✓ Q03: duplicate names remain distinct; directional totals, kind filters and literal search work
+✓ Q04: missing, unsupported or mismatched sources remain visible without misleading links
+✓ Q05: pagination stays stable, totals cover all pages, invalid filters and empty pages are safe
+✓ I01: split good/bad quantity; original cost restored, weighted average correct, cash unchanged; report reverses only restocked cost; replay writes once
+✓ I02: wrong serial state refused; inspected used serial becomes sellable in correct condition and can be sold
+✓ I03: defective serial stays non-sellable and cannot be sold
+✓ I04: concurrent inspectors cannot receive twice; failure at final write rolls back stock, cost, status and journal
+✓ I05: invalid quantities, missing confirmation, invalid condition and blank result leave no changes
+✓ T01: 1000 sale/600 paid/700 returned offsets debt400 and refunds300; successive returns, retry and over-return safe; quarantine does not increase sellable stock
+✓ T02: remaining debt after partial return can be collected, original gross debt cannot be over-collected
+✓ T03: mixed payment restores original credit first; only remaining actual cash creates refund
+✓ T04: serial held for inspection; repeated partial return preserves discount rounding exactly
+✓ T05: concurrent returns cannot duplicate; final failure rolls back; uninspected returns prevent publishing profit
+✓ O01: cancellation preserves cash, creates pending refund once, partial/retry/concurrent payments cannot over-refund
+✓ O02: mixed payment restores only original credit; cash obligation contains only actual cash
+✓ O03: delivered sale refused; late cancellation/refund failures roll back financial changes
+✓ F01: POS costs and discounts from sold lines; excluded preorder/cancellation/deposit/refund/capitalized fees; Vietnam date boundary
+✓ F02: losses remain visible, missing lines flagged, empty period never invents cost
+✓ F03: supplier net purchases, debt and pending refund reconcile independently; duplicate names remain separate
+✓ B00: all production migrations applied to isolated D1
+✓ P03: individual authority gates prices, discounts, debt and credit independently
+✓ B01: cancelling a processing order restores actual stock and records one reversal
+✓ B02: preorder serial is reserved, cannot be sold elsewhere, and is released on cancellation
+✓ B03/B05: reject insufficient stock, duplicate-line demand, anonymous debt and invalid customer without writes
+✓ B04: cancelled preorder cannot be fulfilled or receive another payment
+✓ B06: a real SQLite failure at cash insert rolls back order, stock, payment and auto-created customer
+✓ B07: repair use updates new stock, total stock, variant, journal and repair cost atomically
+✓ B08: deposit 200, fulfill with 500 and collect 300 balances payments, cash, COD and one stock export
+✓ concurrent last-stock sales: one succeeds, one fails, no hidden negative stock
+✓ same request retry creates exactly one order; changed payload under same key is refused
+✓ two concurrent payments do not lose updates or over-collect; same request is charged once
+✓ concurrent fulfillment exports and collects only once
+✓ cancelling paid completed orders requires returned goods and credits the customer without erasing cash
+✓ customer credit pays an invoice once without cash; cancellation restores credit; insufficient balance rolls back
+✓ fulfillment assigns an available serial to an unassigned preorder and refuses price changes
+✓ late failures roll back payment, fulfillment and cancellation credit with their stock changes
+✓ paid anonymous cancellation needs a selected customer; status cannot bypass fulfillment or reopen completed invoices
+✓ missing variants inherit stock atomically; ambiguous variants and fractional stock fail without writes
+✓ repair use late failure rolls back component, stock, journal and cost
+✓ a retry finishing during validation is recovered even when stock is already exhausted
+✓ intentional duplicate customer phones stay separate; automatic matching fails and explicit selection works
+✓ invalid money, quantity, serial ownership/condition/type and overpayment are rejected without writes
+✓ C01: wrong customer, supplier role and document ownership are refused without writes
+✓ C02: overpayment, invalid amount, duplicate rows and missing documents abort the entire request
+✓ C03: cancelled invoices and purchases cannot receive debt payments
+✓ C04: collecting two invoices records payments, cash, COD and correct partial status together
+✓ C05: failure on the second cash entry rolls back both invoices and all receipts
+✓ C06: concurrent retry charges once; changed payload under the same key is refused
+✓ C07: bulk collection racing with POS collection cannot lose an update or exceed the debt
+✓ C08: supplier payments for draft and completed receipts update debt and cash without touching stock
+✓ C09: inconsistent historical payment records cannot be extended silently
+✓ C10: repair collection counts previous cash; overcollection and ambiguous legacy identity fail
+✓ C13: concurrent supplier payments cannot overpay and late cash failure rolls back all supplier debts
+✓ C14: cancelling after bulk collection credits exactly the collected amount once and preserves cash
+✓ C15: concurrent repair collection cannot overcollect; a mixed order/repair cash failure rolls back both
+✓ C16: customers with identical names do not inherit each other cash entries or unlinked manual cash
+✓ C11: manual cash rejects negative/fractional money and untethered business payments
+✓ C12: concurrent manual cash gets unique codes and same-request retries produce one receipt
+✓ D10 invalid product/empty receipt/invalid completion money leave no partial writes
+✓ D01 cancellation retains actual cash and records a pending supplier refund
+✓ D02 repeat cancellation is harmless; cancelled purchases cannot complete
+✓ D03 received purchases require returns, with no erased stock/cash history
+✓ D04 invalid/unconfirmed/excess refunds produce no writes
+✓ D05 partial receipt writes linked cash/settlement together; retry is charged once
+✓ D06 concurrent receipt cannot exceed the pending amount
+✓ D07 final-write failure rolls back cash, obligation and operation receipt
+✓ D08 cancellation failure rolls back the new refund obligation
+✓ D09 full receipt closes the outstanding amount without cancelling original cash
+✓ P01 completion synchronizes stock/type/debt/cash; retry once and changed payload refused
+✓ P02 final receipt failure rolls back newly created type, stock, journal and cash
+✓ P03 simultaneous completions export one receipt and pay once
+✓ P04 serialized receipt creates owned available unit with matching journal/type
+✓ P05 existing serial cannot be imported again or resurrected
+✓ P06 line/receipt mismatch is rejected with no writes
+✓ P07 draft edit keeps stock and cash; paid changes and received edits refused
+✓ P08 failed final draft write restores original items and all financial/stock state
+✓ P09 direct creation synchronizes receipt, stock and cash; request retry writes once
+✓ P10 late create failure rolls back supplier, receipt, items, stock and both cash entries
+✓ P11 create draft leaves stock untouched; later completion imports exactly once
+✓ P12 discount and fee allocation and split inventory movements preserve every currency unit
+✓ P13 reduced prepaid draft records pending excess, partial refund, receipt and remaining refund without erasing original cash
+✓ P14 cancellation after partial excess refund requests only the remaining actual money
+✓ R01 return offsets unpaid debt first, preserves original receipt and cash, and retry writes once
+✓ R02 successive returns and partial refunds settle only actual money, over-return leaves no changes
+✓ R03 unpaid return reduces debt; remaining supplier debt can still be paid
+✓ R04 final failure rolls back every table; concurrent full returns cannot export twice
+✓ R05 sold serial is refused; eligible serial exits store ownership and sellable stock
+✓ R06 wrong receipt, unconfirmed, blank reason and invalid quantity do not write
+✓ clean records, preorder, drafts and original storefront scope
+✓ opposite discrepancies cannot cancel out in a customer aggregate
+✓ payment mismatch, missing customer, stock mismatch, orphan cash, supplier mismatch; audit preserves records
+✓ overpayment and fractional money are flagged
+✓ failed D1 response cannot pass
+Reservation integration passed: concurrency + pending + terminal settlement + inventory exception + legacy + cross-release rollback + stock purge offset
+manual external refunds
+  ✓ partial refund applies and leaves status paid
+  ✓ refund to the full total flips status to refunded
+  ✓ replayed idempotency key applies nothing and reports duplicate
+  ✓ over-balance is rejected as insufficient_balance, not duplicate
+  ✓ zero and negative amounts are rejected
+  ✓ an order that was never paid cannot be refunded
+  ✓ concurrent refunds cannot exceed the order total
+  ✓ concurrent refunds that both fit both apply
+provider synchronisation
+  ✓ cumulative total is absolute, not additive
+  ✓ duplicate provider event is a no-op
+  ✓ out-of-order (lower) cumulative total is ignored
+  ✓ full provider refund flips status to refunded
+  ✓ provider sync and manual refund stay independent
+  ✓ aggregate clamps at the order total and never goes negative
+corrections
+  ✓ voiding a manual refund decrements and restores status
+  ✓ the same refund cannot be voided twice
+  ✓ provider-authoritative refunds cannot be voided
+review state
+  ✓ a new conflict reopens an acknowledged review
+provider webhook events
+  ✓ a refund event applies to the order it names
+  ✓ a redelivered event changes nothing
+  ✓ two partial refunds on the SAME charge both apply
+  ✓ an event for an unknown payment is kept, not lost
+  ✓ an unmatched event can be retried after the id is backfilled
+  ✓ a legacy order is correlated via the provider session lookup
+Refund correlation lookup failed: Error: provider unavailable
+    at Object.findSessionIdForPayment (file://<HANDOFF_WORKSPACE>/outputs/KGAME_LINUX_HANDOVER_2026-09-29/project/test/integration/refunds.mjs:535:15)
+    at applyRefundEvent (file://<HANDOFF_WORKSPACE>/outputs/KGAME_LINUX_HANDOVER_2026-09-29/project/src/features/refunds/sync.ts:119:36)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async file://<HANDOFF_WORKSPACE>/outputs/KGAME_LINUX_HANDOVER_2026-09-29/project/test/integration/refunds.mjs:533:17
+    at async check (file://<HANDOFF_WORKSPACE>/outputs/KGAME_LINUX_HANDOVER_2026-09-29/project/test/integration/refunds.mjs:31:5)
+    at async file://<HANDOFF_WORKSPACE>/outputs/KGAME_LINUX_HANDOVER_2026-09-29/project/test/integration/refunds.mjs:526:3
+  ✓ a failing lookup keeps the event queued instead of throwing
+  ✓ correlation never steals a session already claimed
+  ✓ a currency mismatch opens a review and moves no money
+  ✓ provider plus manual exceeding the total opens a review
+conflict review across every path
+  ✓ a manual provider sync over the total opens a review
+  ✓ a total that fits opens no review
+reconciliation queue
+  ✓ a conflicting event can be dismissed and leaves the queue
+  ✓ dismissing twice reports nothing left to do
+  ✓ dismissal preserves the original conflict reason
+  ✓ an UNMATCHED event cannot be dismissed
+  ✓ an uncorrelated event reports no order, so it offers Retry
+invariants
+  ✓ no order ever drifted from its components
+  ✓ net revenue never went negative
+  ✓ every succeeded manual refund sums to the external component
+
+refund accounting: all checks passed
+
+existing-image backfill (migration 0026)
+  ✓ adopts gallery AND primary keys, collapsing duplicates
+  ✓ a backfilled image is protected by the delete guard
+
+upload lifecycle
+  ✓ upload records pixel dimensions from the image header
+  ✓ an unreadable header leaves dimensions NULL without failing
+  ✓ successful upload writes the object and creates the row
+  ✓ a failing D1 insert deletes the object it just wrote
+  ✓ a failing storage write creates no media row
+
+guarded deletion
+  ✓ unreferenced media deletes and returns its key
+  ✓ media used by a product gallery cannot be deleted
+  ✓ media used only as a product PRIMARY cannot be deleted
+  ✓ media used by a page cannot be deleted
+  ✓ media used as the logo cannot be deleted
+
+guarded association writes
+  ✓ a stale selection cannot attach media that was already deleted
+  ✓ the same media cannot be attached to one product twice
+  ✓ attaching appends at the next gallery position
+  ✓ page media sync replaces the previous set
+  ✓ page media sync skips media deleted concurrently
+
+concurrency guards
+  ✓ logo is stored only while its media row exists
+  ✓ product image replacement is guarded on the media row
+  ✓ publishing a draft with resolvable media succeeds
+  ✓ page save refuses to publish when a claim loses to a delete
+  ✓ an already-published page stays live when a claim fails
+  ✓ an explicit unpublish is still honoured
+  ✓ an image-heavy save stays inside D1’s free-plan query budget
+  ✓ claims beyond one chunk are still all written
+  ✓ media lookup chunks past D1’s 100-parameter limit
+
+home page target
+  ✓ resolves a published page and an active product
+  ✓ falls back to the catalog when the target is a draft
+  ✓ falls back when the target product is inactive
+  ✓ falls back when the target was deleted
+  ✓ falls back for an unset or malformed setting
+  ✓ a renamed page keeps resolving, because the id is stored
+  ✓ validation refuses what the storefront would not resolve
+
+bulk usage
+  ✓ reports a media referenced ONLY through products.image_key as used
+  ✓ duplicate gallery rows produce ONE product usage entry
+  ✓ resolves a full 48-item page in a bounded number of statements
+  ✓ listMedia paginates newest-first and deterministically
+
+media lifecycle: all checks passed
+
+navigation menus
+  ✓ seed reproduces the existing footer links, in the footer order
+  ✓ seed adds the header Catalog item only when the home page is overridden
+  ✓ seed is lossless up to the footer cap and deterministic beyond it
+  ✓ CHECK rejects a singleton with a target, and an object without one
+  ✓ partial unique index allows duplicates only where it should
+  ✓ the query caps each location even when the table is overfilled
+  ✓ add refuses a draft page, an inactive product, and a missing target
+  ✓ add accepts available targets and assigns dense positions
+  ✓ add reports a full menu without writing
+  ✓ a duplicate singleton comes back as a reason, not an exception
+  ✓ concurrent adds get distinct positions
+  ✓ unavailable targets vanish from the storefront but stay listed for admin
+  ✓ catalog href follows the home page setting
+  ✓ label override wins, clearing it restores the target name
+  ✓ move swaps with the neighbour and is a no-op at the ends
+  ✓ a menu never crosses into the other when reordering
+  ✓ picker offers only available targets, bounded and searchable
+  ✓ picker reports how many matches it did not show
+  ✓ catalogIsOrphaned fires only when the shop is actually unreachable
+  ✓ a deleted target with a custom label is reported as deleted, not draft
+  ✓ a draft target keeps its draft reason (not confused with deletion)
+  ✓ a stale home-page setting does not raise a false catalog warning
+  ✓ menu references are reported per target for the delete warning
+  ✓ reorder sets the whole order from an id list
+  ✓ reorder rejects incomplete, padded, and duplicate id lists
+  ✓ reorder is scoped to one menu
+  ✓ reorder handles a list larger than one chunk
+
+menus: all checks passed
+
+guest-access integration: all assertions passed
+shipping (D1)
+  ✓ first save creates revision 1
+  ✓ an edit at the current revision succeeds and increments it
+  ✓ two writes from the same revision: exactly one wins
+  ✓ a stale write returns conflict and changes nothing
+  ✓ invalid existing JSON cannot be overwritten by the ordinary save path
+  ✓ replace succeeds when the guarded raw value is unchanged
+  ✓ replace returns conflict when another tab repaired it first
+  ✓ a failed save leaves the complete previous document intact
+  ✓ missing-weight count honours variant inheritance
+
+shipping labels (D1)
+  ✓ quoting requires a paid, unfulfilled delivery order
+  ✓ unknown and legacy-null delivery modes cannot quote
+  ✓ a foreign shipment id can never be bought from
+  ✓ exactly one concurrent purchase claim wins
+  ✓ a submitted claim can never be discarded or replaced — at any age
+  ✓ manual fulfillment loses to an in-flight purchase, and vice versa
+  ✓ a forced fulfillment mid-purchase surfaces as a reconciliation state
+  ✓ a late completion of a stale submitted claim records durably
+  ✓ reconciliation settles an uncertain attempt either way
+  ✓ a refund during the provider call blocks fulfillment and the email
+  ✓ an uncertain outcome blocks everything except reconciliation
+  ✓ a refunded-at-Shippo attempt reopens only after recording the audit trail
+  ✓ force-discard is the only local exit for a submitted attempt
+  ✓ recordPurchased lands label, fulfillment, and the shipped email in one batch
+
+shipping D1 checks passed
+D1 integration passed: migrations + seed + bound reads + paid-order write/read + cron handler
+  ✓ catch-all expansion matches the pinned SDK (234 countries)
+stripe country check passed
+
+> minshop@0.1.0 mcp:check
+> bash scripts/check-mcp.sh
+
+
+ ⛅️ wrangler 4.118.0 (update available 4.143.0)
+───────────────────────────────────────────────
+▲ [WARNING] Processing mcp/.wrangler-check.XXXXXX.jsonc configuration:
+
+    - "unsafe" fields are experimental and may change or break at any time.
+
+
+Total Upload: 2748.69 KiB / gzip: 511.93 KiB
+Your Worker has access to the following bindings:
+Binding                                                         Resource                  
+env.STORE_MCP (StoreMcp)                                        Durable Object            
+env.DB (minshop-check-db)                                       D1 Database               
+env.MCP_RATE_LIMITER (ratelimit)                                Unsafe Metadata           
+env.STOREFRONT_URL ("https://minshop-check.workers.dev")        Environment Variable      
+
+--dry-run: exiting now.
+
+> minshop@0.1.0 scaffold:check
+> npm test --prefix create-minshop && npm pack ./create-minshop --dry-run
+
+
+> create-minshop@0.2.0 test
+> node --test
+
+TAP version 13
+# Subtest: parses the npm create options
+ok 1 - parses the npm create options
+  ---
+  duration_ms: 0.767166
+  type: 'test'
+  ...
+# Subtest: accepts supported Node release lines
+ok 2 - accepts supported Node release lines
+  ---
+  duration_ms: 0.195625
+  type: 'test'
+  ...
+# Subtest: rejects unsupported Node release lines
+ok 3 - rejects unsupported Node release lines
+  ---
+  duration_ms: 0.169625
+  type: 'test'
+  ...
+# Subtest: scaffolds a clean storefront repository
+ok 4 - scaffolds a clean storefront repository
+  ---
+  duration_ms: 202.243917
+  type: 'test'
+  ...
+# Subtest: refuses to overwrite an existing target
+ok 5 - refuses to overwrite an existing target
+  ---
+  duration_ms: 0.281792
+  type: 'test'
+  ...
+# Subtest: derives a theme id from the target directory
+ok 6 - derives a theme id from the target directory
+  ---
+  duration_ms: 0.216917
+  type: 'test'
+  ...
+# Subtest: suffixes rather than fails when the directory name is reserved
+ok 7 - suffixes rather than fails when the directory name is reserved
+  ---
+  duration_ms: 0.045625
+  type: 'test'
+  ...
+# Subtest: rejects reserved and malformed theme ids
+ok 8 - rejects reserved and malformed theme ids
+  ---
+  duration_ms: 0.190167
+  type: 'test'
+  ...
+# Subtest: enforces the application resolver 40-character limit on explicit ids
+ok 9 - enforces the application resolver 40-character limit on explicit ids
+  ---
+  duration_ms: 0.284417
+  type: 'test'
+  ...
+# Subtest: normalizeThemeId returns null when nothing usable survives
+ok 10 - normalizeThemeId returns null when nothing usable survives
+  ---
+  duration_ms: 0.275625
+  type: 'test'
+  ...
+# Subtest: gives the generated store its own theme, selected
+ok 11 - gives the generated store its own theme, selected
+  ---
+  duration_ms: 144.348875
+  type: 'test'
+  ...
+# Subtest: the generated repository CI matrix discovers every theme it carries
+ok 12 - the generated repository CI matrix discovers every theme it carries
+  ---
+  duration_ms: 172.600459
+  type: 'test'
+  ...
+# Subtest: honours an explicit --theme id
+ok 13 - honours an explicit --theme id
+  ---
+  duration_ms: 145.720792
+  type: 'test'
+  ...
+# Subtest: parses --theme
+ok 14 - parses --theme
+  ---
+  duration_ms: 0.116333
+  type: 'test'
+  ...
+1..14
+# tests 14
+# suites 0
+# pass 14
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 714.538875
+npm notice
+npm notice 📦  create-minshop@0.2.0
+npm notice Tarball Contents
+npm notice 1.1kB LICENSE
+npm notice 1.3kB README.md
+npm notice 1.2kB bin/create-minshop.js
+npm notice 852B package.json
+npm notice 7.3kB src/scaffold.js
+npm notice Tarball Details
+npm notice name: create-minshop
+npm notice version: 0.2.0
+npm notice filename: create-minshop-0.2.0.tgz
+npm notice package size: 4.8 kB
+npm notice unpacked size: 11.7 kB
+npm notice shasum: 21be5d4911f691c72b83ffadfece51e8836d3a38
+npm notice integrity: sha512-T3uieIUQR4gQE[...]GWYr3jMO8CCTA==
+npm notice total files: 5
+npm notice
+create-minshop-0.2.0.tgz

@@ -1,0 +1,664 @@
+---
+import type { Product } from './db';
+import type { CategoryOption } from '../categories/db';
+import { toMajorUnits } from '../../config';
+import { formatWeightValue, type WeightUnit } from '../shipping/weight';
+import { attachmentActive } from '../digitalDelivery/rollout.ts';
+
+interface Props {
+  action: string;
+  submitLabel: string;
+  product?: Product | null;
+  error?: string | null;
+  categoryOptions?: CategoryOption[];
+  selectedCategoryIds?: number[];
+  showImage?: boolean;
+  formId?: string;
+  weightUnit?: WeightUnit;
+  weightRequired?: boolean;
+}
+
+const {
+  action,
+  submitLabel,
+  product = null,
+  error = null,
+  categoryOptions = [],
+  selectedCategoryIds = [],
+  showImage = true,
+  formId,
+  weightUnit = 'g',
+  weightRequired = false,
+} = Astro.props;
+
+const selected = new Set(selectedCategoryIds);
+const defaultCurrency = 'vnd';
+const price = product ? toMajorUnits(product.price_cents, 'vnd').toString() : '';
+const inputClass =
+  'mt-1 w-full rounded-md border border-line bg-white px-3 py-2 text-sm text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand focus:outline-none';
+---
+
+<form
+  method="POST"
+  action={action}
+  enctype="multipart/form-data"
+  id={formId}
+  class="max-w-3xl space-y-6"
+>
+  {
+    error && (
+      <div class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex items-center gap-2">
+        <svg class="w-5 h-5 text-red-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        <span>{error}</span>
+      </div>
+    )
+  }
+
+  <!-- 1. THÔNG TIN ĐỊNH DANH HÀNG HÓA -->
+  <div class="rounded-xl border border-line bg-surface p-5 space-y-4 shadow-sm">
+    <div class="flex items-center justify-between border-b border-line pb-3">
+      <h2 class="text-base font-semibold text-gray-900 flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full bg-brand"></span>
+        1. Thông tin hàng hóa cơ bản
+      </h2>
+      <a href="/admin/categories" target="_blank" class="text-xs text-brand hover:underline flex items-center gap-1 font-medium">
+        <span>📁 Quản lý / Đổi tên Danh mục</span>
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+      </a>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-800" for="product_code">
+          Mã hàng hóa (SKU)
+        </label>
+        <input
+          id="product_code"
+          name="product_code"
+          type="text"
+          placeholder="VD: SP000125 hoặc LK000045 (để trống tự sinh mã)"
+          class={inputClass}
+        />
+        <p class="mt-1 text-xs text-gray-500">Mã định danh duy nhất của mặt hàng này.</p>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-gray-800" for="category_id">
+          Danh mục KGAME
+        </label>
+        <select id="category_id" name="category_id" class={inputClass}>
+          <option value="">-- Chọn danh mục --</option>
+          {categoryOptions.map((c) => (
+            <option value={c.id} selected={selected.has(c.id)}>
+              {'- '.repeat(c.depth)}{c.name}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+
+    <div>
+      <label class="block text-sm font-medium text-gray-800" for="name">
+        Tên hàng hóa <span class="text-red-500">*</span>
+      </label>
+      <input
+        id="name"
+        name="name"
+        type="text"
+        required
+        placeholder="VD: Thần Long Kiếm, Natra, Mạch tay cá dĩa..."
+        value={product?.name ?? ''}
+        class={inputClass}
+      />
+    </div>
+
+    <!-- CÁCH QUẢN LÝ -->
+    <div class="pt-2">
+      <label class="block text-sm font-medium text-gray-800 mb-2">Cách thức quản lý kho</label>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label class="flex items-start gap-3 p-3.5 rounded-lg border border-line bg-white cursor-pointer hover:border-brand transition-colors">
+          <input type="radio" name="tracking_mode" value="CODE" checked class="mt-0.5 h-4 w-4 text-brand" id="trackCodeRadio" />
+          <div>
+            <span class="font-semibold text-sm text-gray-900 block">Quản lý theo Mã bộ (Program Code)</span>
+            <span class="text-xs text-gray-500 leading-relaxed block mt-0.5">
+              Mỗi bộ có mã số riêng (777-...). Áp dụng cho: <strong>Cá Dĩa, Máy bắn cá thùng</strong>.
+            </span>
+          </div>
+        </label>
+
+        <label class="flex items-start gap-3 p-3.5 rounded-lg border border-line bg-white cursor-pointer hover:border-brand transition-colors">
+          <input type="radio" name="tracking_mode" value="QUANTITY" class="mt-0.5 h-4 w-4 text-brand" id="trackQtyRadio" />
+          <div>
+            <span class="font-semibold text-sm text-gray-900 block">Quản lý theo Số lượng đơn thuần</span>
+            <span class="text-xs text-gray-500 leading-relaxed block mt-0.5">
+              Chỉ đếm số cái/chiếc. Áp dụng cho: <strong>Cá Tiên, Linh kiện, Dây cáp, Nút bấm</strong>.
+            </span>
+          </div>
+        </label>
+      </div>
+    </div>
+
+    <!-- NHÀ SẢN XUẤT / NGUỒN GỐC (CHO PHÉP CHỌN HOẶC GÕ MỚI TỰ DO) -->
+    <div class="pt-2">
+      <div class="flex items-center justify-between mb-1.5">
+        <label class="block text-sm font-medium text-gray-800" for="mfr_select">
+          Nhà sản xuất / Nguồn gốc
+        </label>
+        <span class="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-medium flex items-center gap-1">
+          🔒 Ẩn với tài khoản Bán hàng
+        </span>
+      </div>
+      
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <select id="mfr_select" class={inputClass}>
+            <option value="Tôi sản xuất" selected>Tôi sản xuất (Nội bộ KGAME — nạp chip USB key)</option>
+            <option value="Ông Dũng">Ông Dũng (Nhập ngoài)</option>
+            <option value="Nguyễn Hưng">Nguyễn Hưng (Nhập ngoài)</option>
+            <option value="__custom__">+ Nhập nhà sản xuất / đối tác mới...</option>
+          </select>
+        </div>
+        <div id="customMfrInputWrapper" style="display: none;">
+          <input
+            id="custom_mfr_input"
+            type="text"
+            placeholder="Gõ tên đối tác mới (VD: Anh Nam, Xưởng A...)"
+            class={inputClass}
+          />
+        </div>
+      </div>
+      
+      <!-- Input ẩn chứa giá trị thực tế gửi lên backend -->
+      <input type="hidden" id="default_manufacturer" name="default_manufacturer" value="Tôi sản xuất" />
+
+      <p class="mt-1.5 text-xs text-gray-500">
+        Chỉ hàng <strong>"Tôi sản xuất"</strong> mới có hạn ẩn USB key. Hàng do đối tác ngoài sản xuất sẽ không có trường thời hạn này.
+      </p>
+    </div>
+  </div>
+
+  <!-- 2. CÁC PHIÊN BẢN / PHÂN LOẠI & ĐỊNH GIÁ (CHO PHÉP THÊM NHIỀU PHIÊN BẢN) -->
+  <div class="rounded-xl border border-line bg-surface p-5 space-y-4 shadow-sm">
+    <div class="flex items-center justify-between border-b border-line pb-3">
+      <div>
+        <h2 class="text-base font-semibold text-gray-900 flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-brand"></span>
+          2. Các Phiên bản / Phân loại & Giá bán (VNĐ)
+        </h2>
+        <p class="text-xs text-gray-500 mt-0.5">
+          Ví dụ: Thần Long Kiếm có các bản 620, 617, 616; Natra có các bản 2.11, 2.06.
+        </p>
+      </div>
+      <button
+        type="button"
+        id="btnAddVersion"
+        class="inline-flex items-center gap-1 text-xs font-bold text-brand bg-brand/10 hover:bg-brand hover:text-white px-3 py-1.5 rounded-lg transition"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        <span>+ Thêm phiên bản khác</span>
+      </button>
+    </div>
+
+    <!-- Danh sách các dòng phiên bản -->
+    <div id="versionsList" class="space-y-3">
+      <!-- Dòng phiên bản 1 -->
+      <div class="version-row grid grid-cols-12 gap-3 items-end p-3 rounded-lg border border-line bg-white">
+        <div class="col-span-4">
+          <label class="block text-xs font-medium text-gray-700">Tên phiên bản <span class="text-red-500">*</span></label>
+          <input
+            name="version_name"
+            type="text"
+            required
+            value="620"
+            placeholder="VD: 620, 617, Không PIN"
+            class={`version-name-input ${inputClass}`}
+          />
+        </div>
+        <div class="col-span-4">
+          <label class="block text-xs font-medium text-gray-700">Giá bán niêm yết (VNĐ) <span class="text-red-500">*</span></label>
+          <input
+            name="sale_price"
+            type="number"
+            step="10000"
+            min="0"
+            required
+            value={price || '15000000'}
+            class={inputClass}
+          />
+        </div>
+        <div class="col-span-3">
+          <label class="block text-xs font-medium text-gray-700">Giá vốn (VNĐ)</label>
+          <input
+            name="cost_price"
+            type="number"
+            step="10000"
+            min="0"
+            value="8000000"
+            class={inputClass}
+          />
+        </div>
+        <div class="col-span-1 flex justify-center pb-1">
+          <button
+            type="button"
+            class="btn-remove-version text-gray-300 hover:text-red-500 p-1 rounded transition"
+            title="Xóa phiên bản này"
+            style="visibility: hidden;"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tồn kho ban đầu nếu quản lý theo số lượng -->
+    <div id="stockQuantityContainer" style="display: none;" class="pt-2">
+      <label class="block text-xs font-medium text-gray-700" for="stock">
+        Số lượng tồn kho ban đầu (Cái/Chiếc)
+      </label>
+      <input
+        id="stock"
+        name="stock"
+        type="number"
+        step="1"
+        min="0"
+        value={product?.stock ?? 0}
+        class={inputClass}
+      />
+      <p class="mt-1 text-xs text-gray-500">Áp dụng cho Cá Tiên, Linh kiện khi nhập số lượng ban đầu.</p>
+    </div>
+  </div>
+
+  <!-- 3. TIỆN ÍCH NHẬP NHANH MÃ BỘ (PROGRAM CODE) -->
+  <div id="quickUnitContainer" class="rounded-xl border border-indigo-200 bg-indigo-50/50 p-5 space-y-4 shadow-sm">
+    <div class="flex items-center justify-between">
+      <label class="flex items-center gap-2.5 cursor-pointer">
+        <input
+          type="checkbox"
+          id="init_unit"
+          name="init_unit"
+          value="1"
+          class="h-4 w-4 rounded text-brand focus:ring-brand"
+        />
+        <span class="text-sm font-semibold text-indigo-950">
+          Khởi tạo luôn 1 bộ vật lý vào kho ngay bây giờ
+        </span>
+      </label>
+      <span class="text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 font-medium">Tiện ích tạo nhanh</span>
+    </div>
+    <p class="text-xs text-indigo-700/80 leading-relaxed">
+      Dành cho trường hợp anh đang cầm sẵn 1 máy/bộ trên tay muốn nhập kho ngay mà không cần tạo Lệnh Sản Xuất riêng.
+    </p>
+
+    <div id="unitFields" class="space-y-4 pt-2 border-t border-indigo-100" style="display: none;">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div>
+          <label class="block text-xs font-medium text-gray-800" for="unit_version_select">
+            Thuộc phiên bản nào?
+          </label>
+          <select id="unit_version_select" class={inputClass}>
+            <!-- Tự động cập nhật theo các dòng phiên bản phía trên -->
+          </select>
+          <input type="hidden" id="unit_version_index" name="unit_version_index" value="0" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-800" for="init_program_code">
+            Mã bộ (Program Code)
+          </label>
+          <input
+            id="init_program_code"
+            name="init_program_code"
+            type="text"
+            placeholder="VD: 777-62020834"
+            class={inputClass}
+          />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-800" for="init_supplier_name">
+            Nguồn mua / Thợ ráp
+          </label>
+          <input
+            id="init_supplier_name"
+            name="init_supplier_name"
+            type="text"
+            placeholder="VD: Thợ Kiên ráp / Mua lại"
+            class={inputClass}
+          />
+        </div>
+      </div>
+
+      <!-- KHỐI THỜI HẠN ẨN USB KEY (Chỉ hiện khi là Tôi sản xuất) -->
+      <div id="secretExpirySection" class="rounded-lg bg-white p-4 border border-indigo-200 space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold text-gray-800 flex items-center gap-1.5">
+            🔑 Thời hạn ẩn USB Key (Chỉ dành cho bộ nội bộ KGAME sản xuất)
+          </span>
+          <span class="text-[11px] text-gray-400">Ẩn với khách & bán hàng</span>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-[11px] font-medium text-gray-600 mb-1" for="init_expiry_days">
+              Gói thời hạn
+            </label>
+            <select id="init_expiry_days" name="init_expiry_days" class={inputClass}>
+              <option value="400" selected>400 ngày (~13 tháng)</option>
+              <option value="200">200 ngày (~6.5 tháng)</option>
+              <option value="100">100 ngày (~3.3 tháng)</option>
+              <option value="60">60 ngày (~2 tháng)</option>
+              <option value="30">30 ngày (~1 tháng)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[11px] font-medium text-gray-600 mb-1" for="init_expiry_date">
+              Hoặc chọn ngày hết hạn cụ thể
+            </label>
+            <input
+              id="init_expiry_date"
+              name="init_expiry_date"
+              type="date"
+              class={inputClass}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. MÔ TẢ VÀ ẢNH -->
+  <div class="rounded-xl border border-line bg-surface p-5 space-y-4 shadow-sm">
+    <h2 class="text-base font-semibold text-gray-900 flex items-center gap-2">
+      <span class="w-2.5 h-2.5 rounded-full bg-brand"></span>
+      4. Thông tin bổ sung
+    </h2>
+
+    <div>
+      <label class="block text-sm font-medium text-gray-800" for="description">Mô tả sản phẩm</label>
+      <textarea
+        id="description"
+        name="description"
+        rows="3"
+        placeholder="Ghi chú chi tiết về bo mạch, cấu hình, cách chơi..."
+        class={inputClass}
+      >{product?.description ?? ''}</textarea>
+    </div>
+
+    {
+      showImage && (
+        <div>
+          <label class="block text-sm font-medium text-gray-800 mb-1" for="image">
+            Ảnh đại diện sản phẩm
+          </label>
+          <input
+            id="image"
+            name="image"
+            type="file"
+            accept="image/*"
+            class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-brand file:text-on-brand hover:file:bg-brand-hover cursor-pointer"
+          />
+        </div>
+      )
+    }
+
+    <div class="pt-2">
+      <label class="flex items-center gap-2 text-sm text-gray-800 cursor-pointer">
+        <input
+          name="active"
+          type="checkbox"
+          checked={product ? product.active === 1 : true}
+          class="h-4 w-4 rounded text-brand focus:ring-brand"
+        />
+        <span>Hiển thị sản phẩm trên danh mục bán hàng</span>
+      </label>
+    </div>
+  </div>
+
+  {attachmentActive() && <fieldset class="rounded-md border border-line p-4">
+    <legend class="px-1 text-sm font-medium">Giao hàng</legend>
+    <label class="flex items-center gap-2 text-sm">
+      <input
+        name="requires_shipping"
+        type="checkbox"
+        checked={product ? product.requires_shipping === 1 : true}
+        class="h-4 w-4"
+      />
+      Cần giao hàng
+    </label>
+    <p class="mt-1 text-xs text-muted">
+      Bỏ chọn với sản phẩm số. Sản phẩm này không được tính vào khối lượng giao hàng
+      và không cần nhập khối lượng khi thanh toán.
+    </p>
+    <div class="mt-3">
+      <label class="block text-sm font-medium" for="weight">Khối lượng ({weightUnit})</label>
+      <input
+        id="weight"
+        name="weight"
+        type="text"
+        inputmode="decimal"
+        value={product?.weight_grams != null ? formatWeightValue(product.weight_grams, weightUnit) : ''}
+        class={inputClass}
+      />
+      <p class="mt-1 text-xs text-muted">
+        Khối lượng sản phẩm đã đóng gói, chưa gồm phần bao bì chung cấu hình ở mục Giao hàng.
+        {weightRequired
+          ? ' Bắt buộc khi tất cả vùng giao hàng tính phí theo khối lượng.'
+          : ' Có thể để trống khi còn phương thức giao hàng tính phí cố định.'}
+      </p>
+    </div>
+  </fieldset>}
+
+  <fieldset class="rounded-md border border-line p-4">
+    <legend class="px-1 text-sm font-medium">Tệp tải xuống sau thanh toán</legend>
+    {product?.file_key && (
+      <p class="mb-3 text-sm text-muted">
+        Đã đính kèm: <strong>{product.file_name ?? 'download'}</strong>
+        {product.file_size_bytes != null && ` (${Math.ceil(product.file_size_bytes / 1024)} KB)`}
+      </p>
+    )}
+    <label class="block text-sm font-medium" for="deliverable">{product?.file_key ? 'Thay tệp' : 'Đính kèm tệp'}</label>
+    <input
+      id="deliverable"
+      name="deliverable"
+      type="file"
+      accept=".pdf,.zip,.epub,.mp3,.m4a,.txt"
+      class="mt-1 block w-full text-sm text-muted"
+    />
+    <p class="mt-1 text-xs text-muted">Khách được tải tệp riêng sau thanh toán. Chấp nhận PDF, ZIP, EPUB, MP3, M4A hoặc TXT; tối đa 25 MB. Nếu chỉ bán tệp, bỏ chọn <strong>Cần giao hàng</strong> ở trên.</p>
+    {product?.file_key && (
+      <label class="mt-3 flex items-center gap-2 text-sm">
+        <input type="checkbox" name="remove_deliverable" class="h-4 w-4" />
+        Gỡ tệp đính kèm cho các đơn mua sau
+      </label>
+    )}
+  </fieldset>
+
+
+  <input type="hidden" name="currency" value={defaultCurrency} />
+
+  <!-- NÚT LƯU -->
+  <div class="flex items-center gap-3 pt-2">
+    <button
+      type="submit"
+      class="rounded-lg bg-brand px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover transition-colors"
+    >
+      {submitLabel}
+    </button>
+    <a
+      href="/admin/products"
+      class="rounded-lg border border-line px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+    >
+      Hủy bỏ
+    </a>
+  </div>
+</form>
+
+<script>
+  function setupProductFormInteractions() {
+    const trackCodeRadio = document.getElementById('trackCodeRadio') as HTMLInputElement | null;
+    const trackQtyRadio = document.getElementById('trackQtyRadio') as HTMLInputElement | null;
+    const stockQtyContainer = document.getElementById('stockQuantityContainer');
+    const quickUnitContainer = document.getElementById('quickUnitContainer');
+    const initUnitCheckbox = document.getElementById('init_unit') as HTMLInputElement | null;
+    const unitFields = document.getElementById('unitFields');
+    
+    // Manufacturer elements
+    const mfrSelect = document.getElementById('mfr_select') as HTMLSelectElement | null;
+    const customMfrInputWrapper = document.getElementById('customMfrInputWrapper');
+    const customMfrInput = document.getElementById('custom_mfr_input') as HTMLInputElement | null;
+    const hiddenMfrInput = document.getElementById('default_manufacturer') as HTMLInputElement | null;
+    const secretExpirySection = document.getElementById('secretExpirySection');
+
+    // Versions list & unit version select
+    const btnAddVersion = document.getElementById('btnAddVersion');
+    const versionsList = document.getElementById('versionsList');
+    const unitVersionSelect = document.getElementById('unit_version_select') as HTMLSelectElement | null;
+    const unitVersionIndexInput = document.getElementById('unit_version_index') as HTMLInputElement | null;
+
+    function updateTrackingMode() {
+      const isCode = trackCodeRadio?.checked ?? true;
+      if (quickUnitContainer) quickUnitContainer.style.display = isCode ? 'block' : 'none';
+      if (stockQtyContainer) stockQtyContainer.style.display = isCode ? 'none' : 'block';
+    }
+
+    function updateUnitFields() {
+      if (unitFields && initUnitCheckbox) {
+        unitFields.style.display = initUnitCheckbox.checked ? 'block' : 'none';
+      }
+    }
+
+    function updateManufacturer() {
+      if (!mfrSelect || !hiddenMfrInput) return;
+
+      if (mfrSelect.value === '__custom__') {
+        if (customMfrInputWrapper) customMfrInputWrapper.style.display = 'block';
+        hiddenMfrInput.value = customMfrInput?.value.trim() || 'Đối tác ngoài';
+        if (secretExpirySection) secretExpirySection.style.display = 'none';
+      } else {
+        if (customMfrInputWrapper) customMfrInputWrapper.style.display = 'none';
+        hiddenMfrInput.value = mfrSelect.value;
+        const isSelf = mfrSelect.value === 'Tôi sản xuất';
+        if (secretExpirySection) secretExpirySection.style.display = isSelf ? 'block' : 'none';
+      }
+    }
+
+    function syncVersionSelect() {
+      if (!unitVersionSelect || !versionsList) return;
+      const inputs = versionsList.querySelectorAll<HTMLInputElement>('.version-name-input');
+      const currentSelected = unitVersionSelect.value;
+      unitVersionSelect.innerHTML = '';
+      inputs.forEach((input, index) => {
+        const val = input.value.trim() || `Bản ${index + 1}`;
+        const opt = document.createElement('option');
+        opt.value = String(index);
+        opt.textContent = `Bản ${val}`;
+        if (String(index) === currentSelected) opt.selected = true;
+        unitVersionSelect.appendChild(opt);
+      });
+      if (unitVersionIndexInput) {
+        unitVersionIndexInput.value = unitVersionSelect.value || '0';
+      }
+    }
+
+    function updateRemoveButtons() {
+      if (!versionsList) return;
+      const rows = versionsList.querySelectorAll('.version-row');
+      rows.forEach((row) => {
+        const btn = row.querySelector<HTMLButtonElement>('.btn-remove-version');
+        if (btn) {
+          btn.style.visibility = rows.length > 1 ? 'visible' : 'hidden';
+        }
+      });
+    }
+
+    // Add version row
+    btnAddVersion?.addEventListener('click', () => {
+      if (!versionsList) return;
+      const row = document.createElement('div');
+      row.className = 'version-row grid grid-cols-12 gap-3 items-end p-3 rounded-lg border border-line bg-white';
+      row.innerHTML = `
+        <div class="col-span-4">
+          <label class="block text-xs font-medium text-gray-700">Tên phiên bản <span class="text-red-500">*</span></label>
+          <input
+            name="version_name"
+            type="text"
+            required
+            placeholder="VD: 617, 616, 2.11"
+            class="version-name-input mt-1 w-full rounded-md border border-line bg-white px-3 py-2 text-sm text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand focus:outline-none"
+          />
+        </div>
+        <div class="col-span-4">
+          <label class="block text-xs font-medium text-gray-700">Giá bán niêm yết (VNĐ) <span class="text-red-500">*</span></label>
+          <input
+            name="sale_price"
+            type="number"
+            step="10000"
+            min="0"
+            required
+            value="14000000"
+            class="mt-1 w-full rounded-md border border-line bg-white px-3 py-2 text-sm text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand focus:outline-none"
+          />
+        </div>
+        <div class="col-span-3">
+          <label class="block text-xs font-medium text-gray-700">Giá vốn (VNĐ)</label>
+          <input
+            name="cost_price"
+            type="number"
+            step="10000"
+            min="0"
+            value="7500000"
+            class="mt-1 w-full rounded-md border border-line bg-white px-3 py-2 text-sm text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand focus:outline-none"
+          />
+        </div>
+        <div class="col-span-1 flex justify-center pb-1">
+          <button
+            type="button"
+            class="btn-remove-version text-gray-400 hover:text-red-500 p-1 rounded transition"
+            title="Xóa phiên bản này"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+          </button>
+        </div>
+      `;
+
+      versionsList.appendChild(row);
+      updateRemoveButtons();
+      syncVersionSelect();
+
+      // Listen to input change on new row
+      const newNameInput = row.querySelector('.version-name-input');
+      newNameInput?.addEventListener('input', syncVersionSelect);
+
+      const btnRemove = row.querySelector('.btn-remove-version');
+      btnRemove?.addEventListener('click', () => {
+        row.remove();
+        updateRemoveButtons();
+        syncVersionSelect();
+      });
+    });
+
+    // Event listeners
+    trackCodeRadio?.addEventListener('change', updateTrackingMode);
+    trackQtyRadio?.addEventListener('change', updateTrackingMode);
+    initUnitCheckbox?.addEventListener('change', updateUnitFields);
+    mfrSelect?.addEventListener('change', updateManufacturer);
+    customMfrInput?.addEventListener('input', updateManufacturer);
+    unitVersionSelect?.addEventListener('change', () => {
+      if (unitVersionIndexInput && unitVersionSelect) {
+        unitVersionIndexInput.value = unitVersionSelect.value;
+      }
+    });
+
+    // Listen on initial version row
+    const initialNameInput = versionsList?.querySelector('.version-name-input');
+    initialNameInput?.addEventListener('input', syncVersionSelect);
+
+    // Initial run
+    updateTrackingMode();
+    updateUnitFields();
+    updateManufacturer();
+    syncVersionSelect();
+    updateRemoveButtons();
+  }
+
+  setupProductFormInteractions();
+  document.addEventListener('astro:page-load', setupProductFormInteractions);
+</script>

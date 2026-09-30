@@ -1,0 +1,43 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { permissionKeys,permissionLabels,parsePermissions } from '../../features/auth/permissions';
+import { roleLabels } from '../../features/auth/staffPolicy';
+export const prerender=false;
+if(Astro.locals.adminPrincipal?.role!=='OWNER')return new Response('Chỉ chủ cửa hàng được quản lý tài khoản.',{status:403});
+const rows=(await env.DB.prepare('SELECT id,username,display_name,role,enabled,must_change_password,permissions_json FROM staff_accounts ORDER BY id').all<{id:number;username:string;display_name:string;role:'VIEWER'|'CASHIER';enabled:number;must_change_password:number;permissions_json:string}>()).results;
+const history=(await env.DB.prepare('SELECT e.id,e.action,e.actor,e.created_at,a.username FROM staff_account_events e JOIN staff_accounts a ON a.id=e.staff_id ORDER BY e.id DESC LIMIT 30').all<{id:number;action:string;actor:string;created_at:string;username:string}>()).results;
+---
+<AdminLayout title="Tài khoản nhân viên" active="staff">
+ <h1 class="text-2xl font-bold mb-3">Tài khoản nhân viên</h1>
+ <p class="mb-3">Mỗi nhân viên dùng tên đăng nhập riêng. Chủ cửa hàng tiếp tục dùng mật khẩu quản trị hiện có. Nhân viên phải đổi mật khẩu được cấp khi đăng nhập lần đầu và sau mỗi lần chủ cửa hàng đặt lại mật khẩu.</p>
+ <p class="mb-5">Vai trò là mẫu quyền ban đầu. Chỉ chủ cửa hàng được bật/tắt từng quyền bên dưới. Thu ngân mặc định được xem, lập, thu tiền và giao đơn; đổi giá, giảm giá, bán nợ và dùng số dư cần cấp riêng. Thay đổi quyền sẽ đăng xuất các phiên cũ.</p>
+ {Astro.url.searchParams.get('error') && <p role="alert" class="p-3 mb-4 border rounded text-red-700">{Astro.url.searchParams.get('error')}</p>}
+ {Astro.url.searchParams.has('success') && <p role="status" class="p-3 mb-4 border rounded text-green-700">Đã lưu tài khoản. Khi đổi quyền, khóa hoặc đặt lại mật khẩu, các phiên cũ bị thu hồi.</p>}
+ <section class="bg-white border rounded p-4 mb-5"><h2 class="font-bold mb-3">Tạo nhân viên</h2>
+ <form method="POST" action="/api/admin/staff" class="grid gap-3 sm:grid-cols-2">
+ <input type="hidden" name="action" value="create" />
+ <label>Tên đăng nhập<input name="username" required minlength="3" maxlength="40" pattern="[a-zA-Z0-9][a-zA-Z0-9._\-]{2,39}" autocomplete="off" class="block w-full border rounded p-2" /></label>
+ <label>Tên hiển thị<input name="name" required maxlength="100" class="block w-full border rounded p-2" /></label>
+ <label>Mật khẩu (12–128 ký tự)<input name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password" class="block w-full border rounded p-2" /></label>
+ <label>Mẫu quyền<select name="role" class="block w-full border rounded p-2"><option value="VIEWER">Chỉ xem bán hàng</option><option value="CASHIER">Thu ngân</option></select></label>
+<fieldset class="w-full sm:col-span-2 grid gap-2 sm:grid-cols-2 border rounded p-3"><legend>Quyền được cấp</legend><input type="hidden" name="permissions_present" value="1" />{permissionKeys.map(p=><label class="text-sm"><input type="checkbox" name="permissions" value={p} checked={p==='sales.view'} /> {permissionLabels[p]}</label>)}<button type="button" data-default-permissions class="border rounded p-2">Áp dụng mẫu quyền đang chọn</button></fieldset>
+ <button class="bg-blue-700 text-white rounded p-2 sm:col-span-2">Tạo tài khoản</button>
+ </form></section>
+ <h2 class="font-bold mb-3">Nhân viên ({rows.length})</h2>
+ <div class="space-y-3">{rows.map(row=><section class="bg-white rounded border p-4"><h3 class="font-bold">{row.display_name} · {row.username} · NV#{row.id}</h3><p class="text-sm mb-3">{roleLabels[row.role]} · {row.enabled?'Đang hoạt động':'Đã khóa'} · {row.must_change_password?'Cần đổi mật khẩu được cấp':'Đã đổi mật khẩu cá nhân'}</p>
+ <form method="POST" action="/api/admin/staff" class="flex flex-wrap gap-3 items-end"><input type="hidden" name="action" value="update" /><input type="hidden" name="id" value={row.id} />
+ <label>Mẫu quyền<select name="role" class="block border rounded p-2"><option value="VIEWER" selected={row.role==='VIEWER'}>Chỉ xem bán hàng</option><option value="CASHIER" selected={row.role==='CASHIER'}>Thu ngân</option></select></label>
+ <label>Mật khẩu mới (để trống để giữ)<input name="password" type="password" minlength="12" maxlength="128" autocomplete="new-password" class="block border rounded p-2" /></label>
+ <fieldset class="w-full sm:col-span-2 grid gap-2 sm:grid-cols-2 border rounded p-3"><legend>Quyền được cấp</legend><input type="hidden" name="permissions_present" value="1" />{permissionKeys.map(p=><label class="text-sm"><input type="checkbox" name="permissions" value={p} checked={parsePermissions(row.permissions_json).includes(p)} /> {permissionLabels[p]}</label>)}<button type="button" data-default-permissions class="border rounded p-2">Áp dụng mẫu quyền đang chọn</button></fieldset>
+ <label class="p-2"><input name="enabled" type="checkbox" checked={!!row.enabled} /> Cho phép đăng nhập</label><button class="rounded border border-blue-700 text-blue-700 p-2">Lưu và thu hồi phiên cũ</button></form></section>)}</div>
+ <section class="mt-5 rounded border p-4 bg-white"><h2 class="font-bold mb-3">Lịch sử tài khoản gần nhất</h2><p class="text-sm mb-2">Lưu người thực hiện và thay đổi quyền; không lưu mật khẩu vào lịch sử.</p>{history.map(h=><p class="text-sm break-words">{h.created_at} UTC · {h.username} · {h.action} · {h.actor}</p>)}</section>
+</AdminLayout>
+
+<script>
+import { defaultPermissions } from '../../features/auth/permissions';
+document.querySelectorAll<HTMLButtonElement>('[data-default-permissions]').forEach(button=>button.addEventListener('click',()=>{
+ const form=button.closest('form')!;const permissions=defaultPermissions((form.elements.namedItem('role') as HTMLInputElement).value);
+ form.querySelectorAll<HTMLInputElement>('[name=permissions]').forEach(input=>{input.checked=permissions.includes(input.value as typeof permissions[number]);});
+}));
+</script>

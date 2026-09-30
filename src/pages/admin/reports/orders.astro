@@ -1,0 +1,249 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import ReportSidebar from '../../../components/admin/ReportSidebar.astro';
+import { parseDatePreset } from '../../../features/reports/date-utils';
+
+if (!Astro.locals.settings?.setupComplete) return Astro.redirect('/admin/setup', 302);
+
+const url = new URL(Astro.request.url);
+const preset = url.searchParams.get('preset') || 'this_month';
+const customFrom = url.searchParams.get('from');
+const customTo = url.searchParams.get('to');
+const status = url.searchParams.get('status') || '';
+const carrier = url.searchParams.get('carrier') || '';
+
+const dateRange = parseDatePreset(preset, customFrom, customTo);
+
+// Query đơn đặt hàng kèm thông tin vận chuyển và khách hàng
+let sql = `
+  SELECT 
+    o.id,
+    o.public_id,
+    o.order_code,
+    o.created_at,
+    o.amount_total_cents,
+    o.paid_amount_cents,
+    o.cod_amount_cents,
+    o.order_status,
+    o.payment_status,
+    c.name as customer_name,
+    c.phone as customer_phone,
+    s.carrier,
+    s.bus_station,
+    s.tracking_code
+  FROM orders o
+  LEFT JOIN customers c ON o.customer_id = c.id
+  LEFT JOIN shipments s ON o.id = s.order_id
+  WHERE DATE(o.created_at) >= ? AND DATE(o.created_at) <= ?
+`;
+
+const params: any[] = [dateRange.startDate, dateRange.endDate];
+
+if (status) {
+  sql += ` AND o.order_status = ?`;
+  params.push(status);
+}
+
+if (carrier) {
+  sql += ` AND s.carrier = ?`;
+  params.push(carrier);
+}
+
+sql += ` ORDER BY o.id DESC`;
+
+const { results: rawOrders } = await env.DB.prepare(sql).bind(...params).all<{
+  id: number;
+  public_id: string | null;
+  order_code: string | null;
+  created_at: string;
+  amount_total_cents: number;
+  paid_amount_cents: number;
+  cod_amount_cents: number;
+  order_status: string | null;
+  payment_status: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  carrier: string | null;
+  bus_station: string | null;
+  tracking_code: string | null;
+}>();
+
+const orders = rawOrders ?? [];
+
+const totalOrderCount = orders.length;
+const totalOrderAmount = orders.reduce((s, o) => s + (o.amount_total_cents || 0), 0);
+const totalPaidDeposit = orders.reduce((s, o) => s + (o.paid_amount_cents || 0), 0);
+const totalRemainingCod = orders.reduce((s, o) => s + (o.cod_amount_cents || Math.max(0, (o.amount_total_cents || 0) - (o.paid_amount_cents || 0))), 0);
+
+function formatNum(cents: number) {
+  if (!cents || isNaN(cents)) return '0';
+  return new Intl.NumberFormat('en-US').format(cents);
+}
+
+const nowStr = new Date().toLocaleString('vi-VN', {
+  day: '2-digit', month: '2-digit', year: 'numeric',
+  hour: '2-digit', minute: '2-digit'
+});
+---
+
+<AdminLayout title="Báo cáo đặt hàng" active="reports-orders">
+  <div class="flex flex-col lg:flex-row gap-4 items-start relative">
+    <!-- CỘT TRÁI: BỘ LỌC ĐỒNG BỘ -->
+    <ReportSidebar
+      actionUrl="/admin/reports/orders"
+      activeView="table"
+      showViewToggle={false}
+      preset={preset}
+      startDate={dateRange.startDate}
+      endDate={dateRange.endDate}
+      dateLabel={dateRange.label}
+    >
+      <div>
+        <label class="block text-[12px] font-bold text-gray-500 uppercase tracking-wider mb-1">
+          Trạng thái đơn
+        </label>
+        <select
+          name="status"
+          class="w-full h-[34px] px-2.5 bg-white border border-gray-300 rounded-lg text-[13.5px] text-gray-800 focus:border-[#00a2ff] focus:outline-none"
+        >
+          <option value="">-- Tất cả trạng thái --</option>
+          <option value="PENDING" selected={status === 'PENDING'}>Chờ xử lý / Đặt cọc</option>
+          <option value="PROCESSING" selected={status === 'PROCESSING'}>Đang đóng gói / Ráp</option>
+          <option value="DELIVERING" selected={status === 'DELIVERING'}>Đang gửi chành xe</option>
+          <option value="COMPLETED" selected={status === 'COMPLETED'}>Hoàn tất</option>
+          <option value="CANCELLED" selected={status === 'CANCELLED'}>Đã hủy</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-[12px] font-bold text-gray-500 uppercase tracking-wider mb-1">
+          Phương thức giao hàng
+        </label>
+        <select
+          name="carrier"
+          class="w-full h-[34px] px-2.5 bg-white border border-gray-300 rounded-lg text-[13.5px] text-gray-800 focus:border-[#00a2ff] focus:outline-none"
+        >
+          <option value="">-- Tất cả phương thức --</option>
+          <option value="BUS" selected={carrier === 'BUS'}>Gửi chành xe / Xe khách</option>
+          <option value="GHN" selected={carrier === 'GHN'}>Chuyển phát nhanh GHN</option>
+          <option value="PICKUP" selected={carrier === 'PICKUP'}>Khách lấy tại xưởng</option>
+        </select>
+      </div>
+    </ReportSidebar>
+
+    <!-- KHU VỰC NỘI DUNG CHÍNH -->
+    <main class="flex-1 w-full bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+      <!-- HEADER BÁO CÁO -->
+      <div class="p-5 border-b border-gray-100 bg-white">
+        <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
+          <span>Ngày lập: {nowStr}</span>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              onclick="window.print()"
+              class="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-md text-xs transition"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+              </svg>
+              In báo cáo
+            </button>
+          </div>
+        </div>
+
+        <div class="text-center py-2">
+          <h1 class="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">
+            Báo cáo đặt hàng & Tiến độ giao
+          </h1>
+          <p class="text-[13.5px] text-gray-600 mt-1">
+            Từ ngày <strong class="text-gray-900">{dateRange.startDate}</strong> đến ngày <strong class="text-gray-900">{dateRange.endDate}</strong>
+          </p>
+        </div>
+
+        <!-- 4 THẺ KPI ĐẶT HÀNG -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-gray-100 text-center">
+          <div class="p-3 bg-blue-50/50 rounded-lg border border-blue-100">
+            <span class="text-[11.5px] font-bold uppercase tracking-wider text-blue-600">Tổng đơn đặt</span>
+            <p class="text-xl font-bold text-blue-900 mt-1 tabular-nums">{totalOrderCount} <span class="text-xs font-normal">đơn</span></p>
+          </div>
+          <div class="p-3 bg-indigo-50/50 rounded-lg border border-indigo-100">
+            <span class="text-[11.5px] font-bold uppercase tracking-wider text-indigo-600">Tổng giá trị đơn</span>
+            <p class="text-xl font-bold text-indigo-900 mt-1 tabular-nums">{formatNum(totalOrderAmount)}</p>
+          </div>
+          <div class="p-3 bg-emerald-50/50 rounded-lg border border-emerald-100">
+            <span class="text-[11.5px] font-bold uppercase tracking-wider text-emerald-600">Tiền đã đặt cọc</span>
+            <p class="text-xl font-bold text-emerald-900 mt-1 tabular-nums">{formatNum(totalPaidDeposit)}</p>
+          </div>
+          <div class="p-3 bg-amber-50/50 rounded-lg border border-amber-100">
+            <span class="text-[11.5px] font-bold uppercase tracking-wider text-amber-600">Còn nợ COD cần thu</span>
+            <p class="text-xl font-bold text-amber-900 mt-1 tabular-nums">{formatNum(totalRemainingCod)}</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- BẢNG CHI TIẾT ĐƠN ĐẶT HÀNG -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-[14.5px] text-gray-800">
+          <thead>
+            <tr class="bg-[#dcf0fb] border-b border-[#bce2f7] text-[#006ca8] font-bold text-[14px]">
+              <th class="py-3 px-4">Mã đơn</th>
+              <th class="py-3 px-4">Ngày đặt</th>
+              <th class="py-3 px-4">Khách hàng</th>
+              <th class="py-3 px-4">Kênh giao hàng</th>
+              <th class="py-3 px-4 text-right tabular-nums">Tổng tiền</th>
+              <th class="py-3 px-4 text-right tabular-nums text-emerald-700">Đã cọc</th>
+              <th class="py-3 px-4 text-right tabular-nums text-amber-700">Nợ COD</th>
+              <th class="py-3 px-4 text-center">Trạng thái</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">
+            {orders.map(o => {
+              const cod = o.cod_amount_cents || Math.max(0, (o.amount_total_cents || 0) - (o.paid_amount_cents || 0));
+              return (
+                <tr class="hover:bg-blue-50/40 transition">
+                  <td class="py-3 px-4">
+                    <a href={`/admin/orders/${o.public_id || o.id}`} class="text-[#00a2ff] hover:underline font-normal tabular-nums">
+                      #{o.order_code || `DH${o.id}`}
+                    </a>
+                  </td>
+                  <td class="py-3 px-4 text-gray-500 tabular-nums text-[13.5px]">
+                    {o.created_at ? o.created_at.slice(0, 10) : '--'}
+                  </td>
+                  <td class="py-3 px-4">
+                    <div class="font-normal text-gray-900">{o.customer_name || 'Khách vãng lai'}</div>
+                    {o.customer_phone && <div class="text-xs text-gray-400 tabular-nums font-normal">{o.customer_phone}</div>}
+                  </td>
+                  <td class="py-3 px-4 text-[13.5px] text-gray-600">
+                    {o.carrier === 'BUS' ? `Chành xe: ${o.bus_station || 'Xe khách'}` : o.carrier === 'GHN' ? `GHN: ${o.tracking_code || '—'}` : 'Nhận tại xưởng'}
+                  </td>
+                  <td class="py-3 px-4 text-right tabular-nums font-semibold text-gray-900">{formatNum(o.amount_total_cents)}</td>
+                  <td class="py-3 px-4 text-right tabular-nums text-emerald-700">{formatNum(o.paid_amount_cents)}</td>
+                  <td class="py-3 px-4 text-right tabular-nums text-amber-700">{formatNum(cod)}</td>
+                  <td class="py-3 px-4 text-center">
+                    <span class={`inline-block px-2 py-0.5 rounded text-[11.5px] font-medium ${
+                      o.order_status === 'COMPLETED' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                      o.order_status === 'DELIVERING' ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' :
+                      o.order_status === 'CANCELLED' ? 'bg-red-50 text-red-700 border border-red-200' :
+                      'bg-amber-50 text-amber-700 border border-amber-200'
+                    }`}>
+                      {o.order_status || 'Chờ xử lý'}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+
+            {orders.length === 0 && (
+              <tr>
+                <td colspan="8" class="py-12 text-center text-gray-400 text-sm">
+                  Không tìm thấy đơn đặt hàng nào trong khoảng thời gian đã chọn.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+</AdminLayout>

@@ -1,0 +1,877 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import PartnerModal from '../../../components/admin/PartnerModal.astro';
+import PayDebtModal from '../../../components/admin/PayDebtModal.astro';
+import { listPartners, getPartnerDetailsWithHistory } from '../../../features/kgame/db';
+
+export const prerender = false;
+
+const currentType = (Astro.url.searchParams.get('type') as any) || 'ALL';
+const search = Astro.url.searchParams.get('q') || '';
+const filterDebt = Astro.url.searchParams.get('debt') === '1';
+
+// Lấy danh sách đối tác thống nhất từ bảng partners
+const { partners, total } = await listPartners(env.DB, {
+  type: currentType,
+  search: search || undefined,
+  hasDebt: filterDebt,
+  limit: 100,
+});
+
+// Load lịch sử giao dịch và công nợ chi tiết cho từng đối tác
+const partnerDetailsMap: Record<number, any> = {};
+for (const p of partners) {
+  const details = await getPartnerDetailsWithHistory(env.DB, p.id);
+  if (details) {
+    partnerDetailsMap[p.id] = details;
+  }
+}
+
+const formatNumber = (val: number) => {
+  if (!val || isNaN(val)) return '0';
+  return new Intl.NumberFormat('en-US').format(val);
+};
+const formatVND = formatNumber;
+
+const formatDate = (iso: string) => {
+  if (!iso) return '-';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
+  } catch {
+    return iso;
+  }
+};
+
+const success = Astro.url.searchParams.get('success');
+const error = Astro.url.searchParams.get('error');
+
+const pageTitle = currentType === 'CUSTOMER' 
+  ? 'Khách Hàng' 
+  : currentType === 'SUPPLIER' 
+  ? 'Nhà Cung Cấp' 
+  : 'Danh Bạ Đối Tác';
+---
+
+<AdminLayout title={pageTitle} active="customers">
+  <!-- HEADER & NÚT THÊM ĐỐI TÁC -->
+  <div class="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold text-gray-900">{pageTitle}</h1>
+      <p class="mt-1 text-sm text-gray-500">
+        Quản lý danh sách đối tác, lịch sử giao dịch và công nợ.
+      </p>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button
+        type="button"
+        id="btnOpenPartnerModal"
+        class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-white font-semibold text-sm shadow hover:bg-blue-700 transition cursor-pointer"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        <span>+ Thêm Đối Tác Mới</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- THANH SUB-TABS PHÂN LOẠI THUỘC TÍNH ĐỐI TÁC -->
+  <div class="mb-6 flex items-center border-b border-gray-200 text-sm">
+    <a
+      href="/admin/customers?type=ALL"
+      class={`py-3 px-5 font-bold border-b-2 transition flex items-center gap-2 -mb-px ${currentType === 'ALL' ? 'border-brand text-brand' : 'border-transparent text-gray-500 hover:text-gray-900'}`}
+    >
+      <span>👥 Tất cả đối tác</span>
+      {currentType === 'ALL' && <span class="px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700 font-bold">{total}</span>}
+    </a>
+    <a
+      href="/admin/customers?type=CUSTOMER"
+      class={`py-3 px-5 font-bold border-b-2 transition flex items-center gap-2 -mb-px ${currentType === 'CUSTOMER' ? 'border-brand text-brand' : 'border-transparent text-gray-500 hover:text-gray-900'}`}
+    >
+      <span>👤 Khách Hàng</span>
+      {currentType === 'CUSTOMER' && <span class="px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700 font-bold">{total}</span>}
+    </a>
+    <a
+      href="/admin/customers?type=SUPPLIER"
+      class={`py-3 px-5 font-bold border-b-2 transition flex items-center gap-2 -mb-px ${currentType === 'SUPPLIER' ? 'border-brand text-brand' : 'border-transparent text-gray-500 hover:text-gray-900'}`}
+    >
+      <span>🏭 Nhà Cung Cấp</span>
+      {currentType === 'SUPPLIER' && <span class="px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700 font-bold">{total}</span>}
+    </a>
+  </div>
+
+  {success && (
+    <div class="mb-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 flex items-center gap-2">
+      <svg class="w-5 h-5 text-emerald-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+      <span>{success === 'created' ? 'Thêm đối tác mới thành công!' : 'Cập nhật thông tin đối tác thành công!'}</span>
+    </div>
+  )}
+
+  {error && (
+    <div class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex items-center gap-2">
+      <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
+      <span>{error}</span>
+    </div>
+  )}
+
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+    <!-- SIDEBAR BỘ LỌC BÊN TRÁI (3/12) -->
+    <div class="lg:col-span-3 space-y-4">
+      <div class="bg-white rounded-xl border border-line p-4 shadow-sm">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-gray-500 mb-3">Lọc theo công nợ</h3>
+        <div class="space-y-2 text-xs">
+          <a
+            href={`/admin/customers?type=${currentType}`}
+            class={`block p-2.5 rounded-lg border transition ${!filterDebt ? 'border-brand bg-blue-50 text-brand font-bold' : 'border-line hover:bg-gray-50 text-gray-700'}`}
+          >
+            Tất cả danh bạ ({total})
+          </a>
+          <a
+            href={`/admin/customers?type=${currentType}&debt=1`}
+            class={`block p-2.5 rounded-lg border transition ${filterDebt ? 'border-red-500 bg-red-50 text-red-700 font-bold' : 'border-line hover:bg-gray-50 text-gray-700'}`}
+          >
+            {currentType === 'SUPPLIER' ? 'Đang còn nợ NCC cần trả' : 'Đang có nợ cần thu'}
+          </a>
+        </div>
+      </div>
+
+      <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-900 space-y-2">
+        <div class="font-bold flex items-center gap-1.5">
+          <span>💡 Mô hình Đối Tác Hợp Nhất</span>
+        </div>
+        <p class="leading-relaxed text-blue-800">
+          Một đối tác có thể vừa là <strong>Khách Hàng</strong> vừa là <strong>Nhà Cung Cấp</strong>. Bạn có thể tra cứu toàn bộ lịch sử mua hàng, sửa chữa và nhập hàng tại cùng một nơi.
+        </p>
+      </div>
+    </div>
+
+    <!-- BẢNG DANH SÁCH ĐỐI TÁC (9/12) -->
+    <div class="lg:col-span-9 space-y-4">
+      <!-- THANH TÌM KIẾM -->
+      <div class="bg-white rounded-xl border border-line p-3 shadow-sm">
+        <form method="GET" action="/admin/customers" class="flex gap-2">
+          <input type="hidden" name="type" value={currentType} />
+          {filterDebt && <input type="hidden" name="debt" value="1" />}
+          <div class="relative flex-1">
+            <input
+              type="text"
+              name="q"
+              value={search}
+              placeholder="Tìm theo tên đối tác, số điện thoại, mã KH/NCC, địa chỉ..."
+              class="w-full rounded-lg border border-line bg-white pl-9 pr-3 py-2 text-[13.5px] text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand"
+            />
+            <svg class="w-4 h-4 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+          </div>
+          <button type="submit" class="px-4 py-2 rounded-lg bg-gray-900 text-white text-[13.5px] font-semibold hover:bg-black transition">
+            Tìm
+          </button>
+          {search && (
+            <a href={`/admin/customers?type=${currentType}`} class="px-3 py-2 bg-gray-50 text-gray-500 hover:text-gray-800 rounded-lg text-xs font-medium flex items-center">
+              Xóa lọc
+            </a>
+          )}
+        </form>
+      </div>
+
+      <!-- TABLE ACCORDION CHUẨN KIOTVIET -->
+      <div class="bg-white rounded-xl border border-line overflow-hidden shadow-sm">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-[14px]">
+            <thead class="bg-[#f8f9fa] text-gray-700 text-[13px] font-bold border-b border-line select-none uppercase tracking-wider">
+              <tr>
+                <th class="p-3 w-10 text-center">#</th>
+                <th class="p-3 w-28">{currentType === 'SUPPLIER' ? 'Mã NCC' : currentType === 'CUSTOMER' ? 'Mã khách hàng' : 'Mã đối tác'}</th>
+                <th class="p-3">{currentType === 'SUPPLIER' ? 'Tên nhà cung cấp' : currentType === 'CUSTOMER' ? 'Tên khách hàng' : 'Tên đối tác'}</th>
+                <th class="p-3 w-32">Điện thoại</th>
+                <th class="p-3">Địa chỉ</th>
+                <th class="p-3 text-right">{currentType === 'SUPPLIER' ? 'Tổng mua' : currentType === 'CUSTOMER' ? 'Tổng bán' : 'Giao dịch'}</th>
+                <th class="p-3 text-right">{currentType === 'SUPPLIER' ? 'Nợ cần trả hiện tại' : currentType === 'CUSTOMER' ? 'Nợ hiện tại' : 'Công nợ'}</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-line">
+              {partners.length === 0 ? (
+                <tr>
+                  <td colspan="7" class="p-8 text-center text-gray-400 text-xs">
+                    Chưa có đối tác nào phù hợp với bộ lọc
+                  </td>
+                </tr>
+              ) : (
+                partners.map((p: any, idx: number) => {
+                  const details = partnerDetailsMap[p.id] || {};
+                  const orders = details.orders || [];
+                  const repairs = details.repairs || [];
+                  const purchases = details.purchases || [];
+                  const cashTxs = details.cash_transactions || [];
+
+                  const recDebt = p.receivable_debt_cents || 0;
+                  const payDebt = p.payable_debt_cents || 0;
+                  const fullAddress = [p.address_detail, p.ward, p.province].filter(Boolean).join(', ') || p.address || '--';
+
+                  const isSupplierContext = currentType === 'SUPPLIER' || (currentType === 'ALL' && p.is_supplier === 1 && p.is_customer === 0);
+                  const isCustomerContext = currentType === 'CUSTOMER' || (currentType === 'ALL' && p.is_customer === 1 && p.is_supplier === 0);
+                  const isDualContext = currentType === 'ALL' && p.is_customer === 1 && p.is_supplier === 1;
+
+                  return (
+                    <>
+                      <!-- MAIN ROW -->
+                      <tr
+                        class="partner-main-row cursor-pointer hover:bg-blue-50/50 transition border-b border-line select-none"
+                        data-target={`drawer_partner_${p.id}`}
+                      >
+                        <td class="p-3 text-center text-gray-400 tabular-nums text-xs">{idx + 1}</td>
+                        <td class="p-3 text-blue-600 font-mono text-xs font-semibold">
+                          {p.partner_code || `DT${p.id}`}
+                        </td>
+                        <td class="p-3">
+                          <div class="flex items-center gap-1.5 flex-wrap">
+                            <span class="font-bold text-gray-900">{p.name}</span>
+                            {currentType === 'ALL' && p.is_customer === 1 && (
+                              <span class="px-1.5 py-0.2 rounded text-[10px] bg-blue-100 text-blue-800 font-semibold">Khách</span>
+                            )}
+                            {currentType === 'ALL' && p.is_supplier === 1 && (
+                              <span class="px-1.5 py-0.2 rounded text-[10px] bg-indigo-100 text-indigo-800 font-semibold">NCC</span>
+                            )}
+                          </div>
+                          {p.email && <div class="text-[11px] text-gray-400 font-normal">{p.email}</div>}
+                        </td>
+                        <td class="p-3 tabular-nums font-normal text-gray-700 text-xs">{p.phone || '--'}</td>
+                        <td class="p-3 text-xs text-gray-600 max-w-xs truncate" title={fullAddress}>
+                          {fullAddress}
+                        </td>
+                        <td class="p-3 text-right text-xs tabular-nums">
+                          {currentType === 'SUPPLIER' ? (
+                            <span class="font-bold text-gray-900">{formatVND(p.total_purchase_cents || 0)}</span>
+                          ) : currentType === 'CUSTOMER' ? (
+                            <span class="font-bold text-gray-900">{formatVND(p.total_sales_cents || 0)}</span>
+                          ) : (
+                            <div>
+                              {p.is_customer === 1 && p.total_sales_cents > 0 && (
+                                <div class="text-gray-900 font-medium">Bán: {formatVND(p.total_sales_cents)}</div>
+                              )}
+                              {p.is_supplier === 1 && p.total_purchase_cents > 0 && (
+                                <div class="text-indigo-700 font-medium">Nhập: {formatVND(p.total_purchase_cents)}</div>
+                              )}
+                              {!p.total_sales_cents && !p.total_purchase_cents && <span class="text-gray-400">0</span>}
+                            </div>
+                          )}
+                        </td>
+                        <td class="p-3 text-right tabular-nums text-xs">
+                          {p.supplier_pending_refund_cents > 0 && <div class="text-blue-700" title="Khoản NCC phải hoàn lại, theo dõi riêng với tiền còn nợ NCC">NCC chờ hoàn: {formatVND(p.supplier_pending_refund_cents)}</div>}
+
+                          {currentType === 'SUPPLIER' ? (
+                            <span class={`font-bold ${payDebt > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                              {formatVND(payDebt)}
+                            </span>
+                          ) : currentType === 'CUSTOMER' ? (
+                            <span class={`font-bold ${recDebt > 0 ? 'text-red-700' : 'text-emerald-700'}`}>
+                              {formatVND(recDebt)}
+                            </span>
+                          ) : (
+                            <div>
+                              {recDebt > 0 && (
+                                <div class="text-red-700 font-bold" title="Nợ cần thu từ khách">
+                                  Thu: {formatVND(recDebt)}
+                                </div>
+                              )}
+                              {payDebt > 0 && (
+                                <div class="text-amber-700 font-bold" title="Nợ cần trả cho NCC">
+                                  Trả: {formatVND(payDebt)}
+                                </div>
+                              )}
+                              {recDebt === 0 && payDebt === 0 && (
+                                <span class="text-emerald-700 font-medium">0</span>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+
+                      <!-- ACCORDION DRAWER CHI TIẾT -->
+                      <tr id={`drawer_partner_${p.id}`} class="partner-drawer hidden bg-white border-y-2 border-blue-500">
+                        <td colspan="7" class="p-0">
+                          <div class="p-5 bg-white space-y-4">
+                            <!-- TABS HEADER CHUẨN KIOTVIET -->
+                            <div class="flex items-center gap-6 border-b border-gray-200 text-xs font-semibold">
+                              <button
+                                type="button"
+                                class="tab-btn py-2 border-b-2 border-brand text-brand -mb-px flex items-center gap-1.5 cursor-pointer"
+                                data-tab={`tab_info_${p.id}`}
+                              >
+                                <span>Thông tin</span>
+                              </button>
+
+                              {/* TABS DÀNH CHO NHÀ CUNG CẤP */}
+                              {(isSupplierContext || isDualContext) && (
+                                <button
+                                  type="button"
+                                  class="tab-btn py-2 border-b-2 border-transparent text-gray-500 hover:text-gray-900 -mb-px flex items-center gap-1.5 cursor-pointer"
+                                  data-tab={`tab_purchases_${p.id}`}
+                                >
+                                  <span>Lịch sử nhập/trả hàng</span>
+                                  {purchases.length > 0 && (
+                                    <span class="px-1.5 py-0.2 bg-indigo-100 text-indigo-700 rounded-full text-[10px]">
+                                      {purchases.length}
+                                    </span>
+                                  )}
+                                </button>
+                              )}
+
+                              {(isSupplierContext || isDualContext) && (
+                                <button
+                                  type="button"
+                                  class="tab-btn py-2 border-b-2 border-transparent text-gray-500 hover:text-gray-900 -mb-px flex items-center gap-1.5 cursor-pointer"
+                                  data-tab={`tab_sup_debt_${p.id}`}
+                                >
+                                  <span>Nợ cần trả nhà cung cấp</span>
+                                  {payDebt > 0 && (
+                                    <span class="px-1.5 py-0.2 bg-amber-100 text-amber-700 rounded-full text-[10px]">
+                                      {formatVND(payDebt)}
+                                    </span>
+                                  )}
+                                </button>
+                              )}
+
+                              {/* TABS DÀNH CHO KHÁCH HÀNG */}
+                              {(isCustomerContext || isDualContext) && (
+                                <button
+                                  type="button"
+                                  class="tab-btn py-2 border-b-2 border-transparent text-gray-500 hover:text-gray-900 -mb-px flex items-center gap-1.5 cursor-pointer"
+                                  data-tab={`tab_orders_${p.id}`}
+                                >
+                                  <span>Lịch sử bán/trả hàng</span>
+                                  {orders.length > 0 && (
+                                    <span class="px-1.5 py-0.2 bg-blue-100 text-blue-700 rounded-full text-[10px]">
+                                      {orders.length}
+                                    </span>
+                                  )}
+                                </button>
+                              )}
+
+                              {(isCustomerContext || isDualContext) && (
+                                <button
+                                  type="button"
+                                  class="tab-btn py-2 border-b-2 border-transparent text-gray-500 hover:text-gray-900 -mb-px flex items-center gap-1.5 cursor-pointer"
+                                  data-tab={`tab_cust_debt_${p.id}`}
+                                >
+                                  <span>Nợ cần thu từ khách</span>
+                                  {recDebt > 0 && (
+                                    <span class="px-1.5 py-0.2 bg-red-100 text-red-700 rounded-full text-[10px]">
+                                      {formatVND(recDebt)}
+                                    </span>
+                                  )}
+                                </button>
+                              )}
+
+                              {/* TAB SỬA CHỮA (CHỈ KHI CÓ DỮ LIỆU THỰC TẾ) */}
+                              {repairs.length > 0 && currentType !== 'SUPPLIER' && (
+                                <button
+                                  type="button"
+                                  class="tab-btn py-2 border-b-2 border-transparent text-gray-500 hover:text-gray-900 -mb-px flex items-center gap-1.5 cursor-pointer"
+                                  data-tab={`tab_repairs_${p.id}`}
+                                >
+                                  <span>Lịch sử sửa chữa</span>
+                                  <span class="px-1.5 py-0.2 bg-amber-100 text-amber-700 rounded-full text-[10px]">
+                                    {repairs.length}
+                                  </span>
+                                </button>
+                              )}
+                            </div>
+
+                            <!-- TAB 1: THÔNG TIN CHI TIẾT ĐỐI TÁC -->
+                            <div id={`tab_info_${p.id}`} class="tab-content p-2 text-xs space-y-4">
+                              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div class="space-y-2 bg-gray-50 p-4 rounded-xl border border-line">
+                                  <div><span class="text-gray-500">Mã:</span> <strong class="text-blue-700 font-mono">{p.partner_code || `DT${p.id}`}</strong></div>
+                                  <div><span class="text-gray-500">Tên:</span> <strong class="text-gray-900">{p.name}</strong></div>
+                                  <div><span class="text-gray-500">Điện thoại:</span> <strong class="text-gray-800">{p.phone || '--'}</strong></div>
+                                  {p.is_customer === 1 && <div><span class="text-gray-500">Số dư khách:</span> <strong class="text-blue-700">{formatVND(p.customer_credit_cents || 0)}</strong></div>}
+                                  <div><span class="text-gray-500">Email:</span> <strong class="text-gray-800">{p.email || '--'}</strong></div>
+                                  {p.tax_code && <div><span class="text-gray-500">Mã số thuế / CCCD:</span> <strong class="text-gray-800">{p.tax_code}</strong></div>}
+                                  <div class="pt-1 flex items-center gap-2">
+                                    <span class="text-gray-500">Phân loại:</span>
+                                    {p.is_customer === 1 && <span class="px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-semibold">Khách Hàng</span>}
+                                    {p.is_supplier === 1 && <span class="px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 font-semibold">Nhà Cung Cấp</span>}
+                                  </div>
+                                </div>
+
+                                <div class="space-y-2 bg-blue-50/50 p-4 rounded-xl border border-blue-200">
+                                  <div class="font-bold text-blue-900 text-xs">📍 Địa chỉ:</div>
+                                  <div><span class="text-gray-500">Tỉnh / Thành phố:</span> <strong class="text-gray-800">{p.province || '--'}</strong></div>
+                                  <div><span class="text-gray-500">Phường / Xã:</span> <strong class="text-gray-800">{p.ward || '--'}</strong></div>
+                                  <div><span class="text-gray-500">Số nhà, tên đường:</span> <strong class="text-gray-800">{p.address_detail || p.address || '--'}</strong></div>
+                                  {p.note && (
+                                    <div class="pt-2 border-t border-blue-200/50">
+                                      <span class="text-gray-500">Ghi chú:</span>
+                                      <p class="text-gray-700 italic mt-0.5">{p.note}</p>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              {(details.credit_entries || []).length > 0 && <div class="rounded-lg border border-blue-200 p-3 space-y-2">
+                                <strong class="text-blue-900">Lịch sử số dư khách (25 lần gần nhất)</strong>
+                                {(details.credit_entries || []).map((entry: any) => <div class="flex justify-between gap-3 border-t border-line pt-2"><span>{entry.entry_code} · {entry.note}<br /><span class="text-gray-500">{entry.created_at}</span></span><strong class={entry.amount_cents > 0 ? 'text-blue-700' : 'text-orange-700'}>{entry.amount_cents > 0 ? '+' : ''}{formatVND(entry.amount_cents)}</strong></div>)}
+                              </div>}
+
+                              <div class="flex justify-between items-center pt-2">
+                                <div class="flex items-center gap-6">
+                                  {(currentType === 'CUSTOMER' || currentType === 'ALL') && p.is_customer === 1 && (
+                                    <div>
+                                      <span class="text-gray-500">Nợ cần thu từ khách:</span>
+                                      <strong class="text-red-700 ml-1">{formatVND(recDebt)}</strong>
+                                    </div>
+                                  )}
+                                  {(currentType === 'SUPPLIER' || currentType === 'ALL') && p.is_supplier === 1 && (
+                                    <div>
+                                      <span class="text-gray-500">Nợ cần trả cho NCC:</span>
+                                      <strong class="text-amber-700 ml-1">{formatVND(payDebt)}</strong>
+                                    </div>
+                                  )}
+                                </div>
+
+                                <div class="flex items-center gap-2">
+                                  {payDebt > 0 && (
+                                    <button
+                                      type="button"
+                                      class="btn-open-pay-debt px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs cursor-pointer transition shadow-2xs flex items-center gap-1"
+                                      data-partner={JSON.stringify({ id: p.id, name: p.name, phone: p.phone, debt: payDebt })}
+                                      data-target-type="PURCHASE"
+                                      data-docs={JSON.stringify(purchases.filter((pr: any) => pr.receipt_status !== 'CANCELLED' && pr.debt_amount_cents > 0).map((pr: any) => ({
+                                        id: pr.id,
+                                        receipt_code: pr.receipt_code,
+                                        created_at: pr.created_at,
+                                        total_amount_cents: pr.total_amount_cents,
+                                        paid_amount_cents: pr.paid_amount_cents,
+                                        debt_amount_cents: pr.debt_amount_cents,
+                                        doc_type: 'PURCHASE'
+                                      })))}
+                                    >
+                                      <span>💳 Trả nợ NCC</span>
+                                    </button>
+                                  )}
+                                  {recDebt > 0 && (
+                                    <button
+                                      type="button"
+                                      class="btn-open-pay-debt px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs cursor-pointer transition shadow-2xs flex items-center gap-1"
+                                      data-partner={JSON.stringify({ id: p.id, name: p.name, phone: p.phone, debt: recDebt })}
+                                      data-target-type="ORDER"
+                                      data-docs={JSON.stringify([
+                                        ...orders.filter((o: any) => o.order_code && (o.order_type === 'ORDER' || o.order_status === 'COMPLETED') && o.order_status !== 'CANCELLED' && (o.cod_amount_cents > 0 || (o.amount_total_cents - (o.paid_amount_cents || 0)) > 0)).map((o: any) => ({
+                                          id: o.id,
+                                          order_code: o.order_code,
+                                          created_at: o.created_at,
+                                          total_amount_cents: o.amount_total_cents,
+                                          paid_amount_cents: o.paid_amount_cents || 0,
+                                          debt_amount_cents: o.cod_amount_cents || (o.amount_total_cents - (o.paid_amount_cents || 0)),
+                                          doc_type: 'ORDER'
+                                        })),
+                                        ...repairs.filter((rp: any) => rp.status !== 'CANCELLED' && rp.debt_amount_cents > 0).map((rp: any) => ({
+                                          id: rp.id,
+                                          ticket_code: rp.ticket_code,
+                                          created_at: rp.created_at,
+                                          total_amount_cents: rp.repair_price_cents,
+                                          paid_amount_cents: rp.paid_amount_cents || 0,
+                                          debt_amount_cents: rp.debt_amount_cents,
+                                          doc_type: 'REPAIR'
+                                        }))
+                                      ])}
+                                    >
+                                      <span>💰 Thu nợ khách</span>
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    class="btn-edit-partner px-3.5 py-1.5 rounded-lg border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 text-xs font-semibold cursor-pointer transition shadow-2xs"
+                                    data-partner={JSON.stringify(p)}
+                                  >
+                                    ✏️ Sửa thông tin
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* TAB LỊCH SỬ NHẬP/TRẢ HÀNG (NCC) */}
+                            {(isSupplierContext || isDualContext) && (
+                              <div id={`tab_purchases_${p.id}`} class="tab-content p-2 text-xs space-y-3 hidden">
+                                <table class="w-full text-left border border-line rounded-lg overflow-hidden">
+                                  <thead class="bg-[#f8f9fa] border-b border-line font-semibold text-gray-600">
+                                    <tr>
+                                      <th class="p-2.5">Mã phiếu</th>
+                                      <th class="p-2.5">Thời gian</th>
+                                      <th class="p-2.5 text-right">Tổng tiền hàng</th>
+                                      <th class="p-2.5 text-right">Đã trả NCC</th>
+                                      <th class="p-2.5 text-right">Còn nợ NCC</th>
+                                      <th class="p-2.5 text-center">Trạng thái</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody class="divide-y divide-line">
+                                    {purchases.length === 0 ? (
+                                      <tr><td colspan="6" class="p-4 text-center text-gray-400">Chưa có phiếu nhập nào từ nhà cung cấp này</td></tr>
+                                    ) : (
+                                      purchases.map((pr: any) => (
+                                        <tr class="hover:bg-gray-50">
+                                          <td class="p-2.5 font-bold font-mono text-blue-600">
+                                            <a href={`/admin/purchases?q=${pr.receipt_code}`} class="hover:underline">{pr.receipt_code}</a>
+                                          </td>
+                                          <td class="p-2.5 text-gray-500">{formatDate(pr.created_at)}</td>
+                                          <td class="p-2.5 text-right font-semibold tabular-nums text-gray-900">{formatVND(pr.total_amount_cents)}</td>
+                                          <td class="p-2.5 text-right text-emerald-700 tabular-nums">{formatVND(pr.paid_amount_cents)}</td>
+                                          <td class="p-2.5 text-right text-amber-700 font-bold tabular-nums">{formatVND(pr.debt_amount_cents)}</td>
+                                          <td class="p-2.5 text-center">
+                                            <span class={`px-2 py-0.5 rounded text-[10px] font-bold ${pr.receipt_status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                                              {pr.receipt_status === 'COMPLETED' ? 'Hoàn thành' : 'Đã hủy'}
+                                            </span>
+                                          </td>
+                                        </tr>
+                                      ))
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+
+                            {/* TAB NỢ CẦN TRẢ NHÀ CUNG CẤP (CHUẨN 100% ẢNH KIOTVIET) */}
+                            {(isSupplierContext || isDualContext) && (
+                              <div id={`tab_sup_debt_${p.id}`} class="tab-content p-2 text-xs space-y-3 hidden">
+                                <div class="flex items-center justify-between pb-1">
+                                  <span class="font-bold text-gray-700">Lịch sử phát sinh công nợ nhà cung cấp:</span>
+                                  {payDebt > 0 ? (
+                                    <button
+                                      type="button"
+                                      class="btn-open-pay-debt px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-sm transition flex items-center gap-1 cursor-pointer"
+                                      data-partner={JSON.stringify({ id: p.id, name: p.name, phone: p.phone, debt: payDebt })}
+                                      data-target-type="PURCHASE"
+                                      data-docs={JSON.stringify(purchases.filter((pr: any) => pr.receipt_status !== 'CANCELLED' && pr.debt_amount_cents > 0).map((pr: any) => ({
+                                        id: pr.id,
+                                        receipt_code: pr.receipt_code,
+                                        created_at: pr.created_at,
+                                        total_amount_cents: pr.total_amount_cents,
+                                        paid_amount_cents: pr.paid_amount_cents,
+                                        debt_amount_cents: pr.debt_amount_cents,
+                                        doc_type: 'PURCHASE'
+                                      })))}
+                                    >
+                                      <span>💳 Thanh toán nợ NCC</span>
+                                    </button>
+                                  ) : (
+                                    <span class="text-[11px] text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded">Đã thanh toán hết</span>
+                                  )}
+                                </div>
+                                <table class="w-full text-left border border-line rounded-lg overflow-hidden">
+                                  <thead class="bg-[#f8f9fa] border-b border-line font-semibold text-gray-600">
+                                    <tr>
+                                      <th class="p-2.5">Mã phiếu</th>
+                                      <th class="p-2.5">Thời gian</th>
+                                      <th class="p-2.5">Loại</th>
+                                      <th class="p-2.5 text-right">Giá trị</th>
+                                      <th class="p-2.5 text-right">Ghi chú</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody class="divide-y divide-line">
+                                    {purchases.length === 0 && cashTxs.length === 0 ? (
+                                      <tr><td colspan="5" class="p-4 text-center text-gray-400">Không có giao dịch công nợ phát sinh</td></tr>
+                                    ) : (
+                                      <>
+                                        {/* CÁC PHIẾU NHẬP HÀNG TẠO CÔNG NỢ */}
+                                        {purchases.filter((pr: any) => pr.receipt_status !== 'CANCELLED').map((pr: any) => (
+                                          <tr class="hover:bg-gray-50">
+                                            <td class="p-2.5 font-bold font-mono text-blue-600">{pr.receipt_code}</td>
+                                            <td class="p-2.5 text-gray-500">{formatDate(pr.created_at)}</td>
+                                            <td class="p-2.5"><span class="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-medium">Nhập hàng</span></td>
+                                            <td class="p-2.5 text-right font-bold tabular-nums text-gray-900">+{formatVND(pr.total_amount_cents)}</td>
+                                            <td class="p-2.5 text-gray-500 truncate max-w-xs">{pr.note || 'Phiếu nhập hàng'}</td>
+                                          </tr>
+                                        ))}
+                                        {/* CÁC PHIẾU CHI THANH TOÁN TIỀN HÀNG */}
+                                        {cashTxs.filter((tx: any) => tx.flow_type === 'OUT' && (tx.status === 'ACTIVE' || !tx.status)).map((tx: any) => (
+                                          <tr class="hover:bg-gray-50">
+                                            <td class="p-2.5 font-bold font-mono text-emerald-600">{tx.transaction_code}</td>
+                                            <td class="p-2.5 text-gray-500">{formatDate(tx.created_at)}</td>
+                                            <td class="p-2.5"><span class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium">Thanh toán</span></td>
+                                            <td class="p-2.5 text-right font-bold tabular-nums text-emerald-700">-{formatVND(tx.amount_cents)}</td>
+                                            <td class="p-2.5 text-gray-500 truncate max-w-xs">{tx.note || 'Chi trả NCC'}</td>
+                                          </tr>
+                                        ))}
+                                      </>
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+
+                            {/* TAB LỊCH SỬ BÁN/TRẢ HÀNG (KHÁCH HÀNG) */}
+                            {(isCustomerContext || isDualContext) && (
+                              <div id={`tab_orders_${p.id}`} class="tab-content p-2 text-xs space-y-3 hidden">
+                                <table class="w-full text-left border border-line rounded-lg overflow-hidden">
+                                  <thead class="bg-[#f8f9fa] border-b border-line font-semibold text-gray-600">
+                                    <tr>
+                                      <th class="p-2.5">Mã đơn</th>
+                                      <th class="p-2.5">Thời gian</th>
+                                      <th class="p-2.5 text-right">Tổng tiền</th>
+                                      <th class="p-2.5 text-right">Đã thanh toán</th>
+                                      <th class="p-2.5 text-right">Nợ COD</th>
+                                      <th class="p-2.5 text-center">Trạng thái</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody class="divide-y divide-line">
+                                    {orders.length === 0 ? (
+                                      <tr><td colspan="6" class="p-4 text-center text-gray-400">Chưa có đơn hàng nào từ khách hàng này</td></tr>
+                                    ) : (
+                                      orders.map((o: any) => (
+                                        <tr class="hover:bg-gray-50">
+                                          <td class="p-2.5 font-bold font-mono text-blue-600">
+                                            <a href={`/admin/orders/${o.id}`} class="hover:underline">{o.order_code}</a>
+                                          </td>
+                                          <td class="p-2.5 text-gray-500">{formatDate(o.created_at)}</td>
+                                          <td class="p-2.5 text-right tabular-nums font-semibold">{formatVND(o.amount_total_cents)}</td>
+                                          <td class="p-2.5 text-right tabular-nums text-emerald-700">{formatVND(o.paid_amount_cents)}</td>
+                                          <td class="p-2.5 text-right tabular-nums text-amber-700 font-bold">{formatVND(o.cod_amount_cents)}</td>
+                                          <td class="p-2.5 text-center">
+                                            <span class="px-2 py-0.5 rounded text-[10.5px] font-bold bg-blue-100 text-blue-800">
+                                              {o.order_status}
+                                            </span>
+                                          </td>
+                                        </tr>
+                                      ))
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+
+                            {/* TAB NỢ CẦN THU TỪ KHÁCH */}
+                            {(isCustomerContext || isDualContext) && (
+                              <div id={`tab_cust_debt_${p.id}`} class="tab-content p-2 text-xs space-y-3 hidden">
+                                <div class="flex items-center justify-between pb-1">
+                                  <span class="font-bold text-gray-700">Lịch sử phát sinh công nợ khách hàng:</span>
+                                  {recDebt > 0 ? (
+                                    <button
+                                      type="button"
+                                      class="btn-open-pay-debt px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm transition flex items-center gap-1 cursor-pointer"
+                                      data-partner={JSON.stringify({ id: p.id, name: p.name, phone: p.phone, debt: recDebt })}
+                                      data-target-type="ORDER"
+                                      data-docs={JSON.stringify([
+                                        ...orders.filter((o: any) => o.order_code && (o.order_type === 'ORDER' || o.order_status === 'COMPLETED') && o.order_status !== 'CANCELLED' && (o.cod_amount_cents > 0 || (o.amount_total_cents - (o.paid_amount_cents || 0)) > 0)).map((o: any) => ({
+                                          id: o.id,
+                                          order_code: o.order_code,
+                                          created_at: o.created_at,
+                                          total_amount_cents: o.amount_total_cents,
+                                          paid_amount_cents: o.paid_amount_cents || 0,
+                                          debt_amount_cents: o.cod_amount_cents || (o.amount_total_cents - (o.paid_amount_cents || 0)),
+                                          doc_type: 'ORDER'
+                                        })),
+                                        ...repairs.filter((rp: any) => rp.status !== 'CANCELLED' && rp.debt_amount_cents > 0).map((rp: any) => ({
+                                          id: rp.id,
+                                          ticket_code: rp.ticket_code,
+                                          created_at: rp.created_at,
+                                          total_amount_cents: rp.repair_price_cents,
+                                          paid_amount_cents: rp.paid_amount_cents || 0,
+                                          debt_amount_cents: rp.debt_amount_cents,
+                                          doc_type: 'REPAIR'
+                                        }))
+                                      ])}
+                                    >
+                                      <span>💰 Thu nợ từ khách</span>
+                                    </button>
+                                  ) : (
+                                    <span class="text-[11px] text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded">Đã thanh toán hết</span>
+                                  )}
+                                </div>
+                                <table class="w-full text-left border border-line rounded-lg overflow-hidden">
+                                  <thead class="bg-[#f8f9fa] border-b border-line font-semibold text-gray-600">
+                                    <tr>
+                                      <th class="p-2.5">Mã phiếu/đơn</th>
+                                      <th class="p-2.5">Thời gian</th>
+                                      <th class="p-2.5">Loại</th>
+                                      <th class="p-2.5 text-right">Giá trị</th>
+                                      <th class="p-2.5 text-right">Ghi chú</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody class="divide-y divide-line">
+                                    {orders.length === 0 && cashTxs.length === 0 ? (
+                                      <tr><td colspan="5" class="p-4 text-center text-gray-400">Không có công nợ phát sinh</td></tr>
+                                    ) : (
+                                      <>
+                                        {orders.filter((o: any) => o.order_status !== 'CANCELLED').map((o: any) => (
+                                          <tr class="hover:bg-gray-50">
+                                            <td class="p-2.5 font-bold font-mono text-blue-600">{o.order_code}</td>
+                                            <td class="p-2.5 text-gray-500">{formatDate(o.created_at)}</td>
+                                            <td class="p-2.5"><span class="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-medium">Bán hàng</span></td>
+                                            <td class="p-2.5 text-right font-bold tabular-nums text-gray-900">+{formatVND(o.amount_total_cents)}</td>
+                                            <td class="p-2.5 text-gray-500 truncate max-w-xs">Đơn hàng bán lẻ</td>
+                                          </tr>
+                                        ))}
+                                        {cashTxs.filter((tx: any) => tx.flow_type === 'IN' && (tx.status === 'ACTIVE' || !tx.status)).map((tx: any) => (
+                                          <tr class="hover:bg-gray-50">
+                                            <td class="p-2.5 font-bold font-mono text-emerald-600">{tx.transaction_code}</td>
+                                            <td class="p-2.5 text-gray-500">{formatDate(tx.created_at)}</td>
+                                            <td class="p-2.5"><span class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium">Khách trả tiền</span></td>
+                                            <td class="p-2.5 text-right font-bold tabular-nums text-emerald-700">-{formatVND(tx.amount_cents)}</td>
+                                            <td class="p-2.5 text-gray-500 truncate max-w-xs">{tx.note || 'Thu tiền từ khách'}</td>
+                                          </tr>
+                                        ))}
+                                      </>
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+
+                            {/* TAB LỊCH SỬ SỬA CHỮA (NẾU CÓ) */}
+                            {repairs.length > 0 && currentType !== 'SUPPLIER' && (
+                              <div id={`tab_repairs_${p.id}`} class="tab-content p-2 text-xs space-y-3 hidden">
+                                <table class="w-full text-left border border-line rounded-lg overflow-hidden">
+                                  <thead class="bg-[#f8f9fa] border-b border-line font-semibold text-gray-600">
+                                    <tr>
+                                      <th class="p-2.5">Mã phiếu sửa</th>
+                                      <th class="p-2.5">Thời gian tiếp nhận</th>
+                                      <th class="p-2.5">Tình trạng lỗi</th>
+                                      <th class="p-2.5 text-right">Chi phí</th>
+                                      <th class="p-2.5 text-center">Trạng thái</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody class="divide-y divide-line">
+                                    {repairs.map((rp: any) => (
+                                      <tr class="hover:bg-gray-50">
+                                        <td class="p-2.5 font-bold font-mono text-amber-600">
+                                          <a href={`/admin/repairs/${rp.id}`} class="hover:underline">{rp.ticket_code || `#${rp.id}`}</a>
+                                        </td>
+                                        <td class="p-2.5 text-gray-500">{formatDate(rp.created_at)}</td>
+                                        <td class="p-2.5 text-gray-700">{rp.issue_description || '--'}</td>
+                                        <td class="p-2.5 text-right font-bold tabular-nums text-gray-900">{formatVND(rp.total_cost_cents || 0)}</td>
+                                        <td class="p-2.5 text-center">
+                                          <span class="px-2 py-0.5 rounded text-[10.5px] font-bold bg-amber-100 text-amber-800">
+                                            {rp.status}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    </>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- COMPONENT MODAL ĐỐI TÁC DÙNG CHUNG -->
+  <PartnerModal
+    modalId="mainPartnerModal"
+    defaultType={currentType === 'SUPPLIER' ? 'SUPPLIER' : currentType === 'CUSTOMER' ? 'CUSTOMER' : 'BOTH'}
+  />
+
+  <!-- COMPONENT MODAL THANH TOÁN CÔNG NỢ GẮN VỚI CHỨNG TỪ GỐC -->
+  <PayDebtModal modalId="mainPayDebtModal" />
+</AdminLayout>
+
+<script>
+  function setupPartnersPage() {
+    // 1. Accordion drawer toggle
+    const rows = document.querySelectorAll('.partner-main-row');
+    rows.forEach((r) => {
+      r.addEventListener('click', () => {
+        const targetId = r.getAttribute('data-target');
+        if (!targetId) return;
+        const drawer = document.getElementById(targetId);
+        if (!drawer) return;
+
+        const isHidden = drawer.classList.contains('hidden');
+        document.querySelectorAll('.partner-drawer').forEach((d) => d.classList.add('hidden'));
+        if (isHidden) {
+          drawer.classList.remove('hidden');
+        }
+      });
+    });
+
+    // 2. Tab switching inside drawer
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    tabBtns.forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tabTarget = btn.getAttribute('data-tab');
+        if (!tabTarget) return;
+
+        const drawer = btn.closest('.partner-drawer');
+        if (!drawer) return;
+
+        drawer.querySelectorAll('.tab-btn').forEach((b) => {
+          b.classList.remove('border-brand', 'text-brand');
+          b.classList.add('border-transparent', 'text-gray-500');
+        });
+        btn.classList.remove('border-transparent', 'text-gray-500');
+        btn.classList.add('border-brand', 'text-brand');
+
+        drawer.querySelectorAll('.tab-content').forEach((c) => c.classList.add('hidden'));
+        const activeTab = drawer.querySelector(`#${tabTarget}`);
+        if (activeTab) activeTab.classList.remove('hidden');
+      });
+    });
+
+    // 3. Mở modal tạo mới
+    const openBtn = document.getElementById('btnOpenPartnerModal');
+    openBtn?.addEventListener('click', () => {
+      window.dispatchEvent(new CustomEvent('open-mainPartnerModal', {
+        detail: {
+          is_customer: window.location.search.includes('type=SUPPLIER') ? false : true,
+          is_supplier: window.location.search.includes('type=SUPPLIER') ? true : false,
+        }
+      }));
+    });
+
+    // 4. Mở modal sửa đối tác
+    const editBtns = document.querySelectorAll('.btn-edit-partner');
+    editBtns.forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const dataStr = btn.getAttribute('data-partner');
+        if (!dataStr) return;
+        try {
+          const partner = JSON.parse(dataStr);
+          window.dispatchEvent(new CustomEvent('edit-mainPartnerModal', { detail: partner }));
+        } catch (err) {
+          console.error('Lỗi parse partner data:', err);
+        }
+      });
+    });
+
+    // 5. Mở modal thanh toán / thu nợ gắn liền chứng từ gốc
+    const payDebtBtns = document.querySelectorAll('.btn-open-pay-debt');
+    payDebtBtns.forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        try {
+          const partner = JSON.parse(btn.getAttribute('data-partner') || '{}');
+          const targetType = btn.getAttribute('data-target-type') || 'PURCHASE';
+          const documents = JSON.parse(btn.getAttribute('data-docs') || '[]');
+          window.dispatchEvent(new CustomEvent('open-mainPayDebtModal', {
+            detail: { partner, targetType, documents }
+          }));
+        } catch (err) {
+          console.error('Lỗi parse dữ liệu thanh toán nợ:', err);
+        }
+      });
+    });
+
+    // 6. Lắng nghe khi lưu đối tác thành công để reload
+    window.addEventListener('partner-saved', () => {
+      window.location.reload();
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupPartnersPage);
+  } else {
+    setupPartnersPage();
+  }
+</script>

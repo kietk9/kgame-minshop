@@ -1,0 +1,575 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+
+export const prerender = false;
+
+// 1. Lấy danh sách khách hàng
+const { results: customers } = await env.DB
+  .prepare('SELECT id, name, phone, address FROM customers ORDER BY name ASC')
+  .all<any>();
+
+// 2. Lấy danh sách sản phẩm
+const { results: products } = await env.DB
+  .prepare('SELECT id, name, product_code, tracking_mode FROM products ORDER BY name ASC')
+  .all<any>();
+
+// 3. Lấy danh sách phiên bản sản phẩm
+const { results: productTypes } = await env.DB
+  .prepare('SELECT id, product_id, name, cost_price_cents FROM product_types ORDER BY id ASC')
+  .all<any>();
+
+// 4. Lấy danh sách máy cũ Kgame từng xuất bán (để chọn nhanh nếu khách bán lại)
+const { results: soldUnits } = await env.DB
+  .prepare(`
+    SELECT pu.id, pt.product_id, pu.product_type_id, pu.program_code, p.name AS product_name, pt.name AS type_name
+    FROM product_units pu
+    JOIN product_types pt ON pu.product_type_id = pt.id
+    JOIN products p ON pt.product_id = p.id
+    WHERE pu.availability = 'SOLD'
+    ORDER BY pu.id DESC
+    LIMIT 200
+  `)
+  .all<any>();
+
+const error = Astro.url.searchParams.get('error');
+---
+
+<AdminLayout title="Lập Phiếu Thu Mua Máy Cũ" active="buybacks">
+  <div class="mb-6 flex items-center justify-between">
+    <div>
+      <div class="flex items-center gap-2 text-sm text-gray-500 mb-1">
+        <a href="/admin/buybacks" class="hover:underline text-brand">Thu Mua Máy Cũ</a>
+        <span>/</span>
+        <span>Lập phiếu thu mua mới</span>
+      </div>
+      <h1 class="text-2xl font-bold text-gray-900">Lập Phiếu Thu Mua Máy Cũ &amp; Linh Kiện</h1>
+    </div>
+
+    <a
+      href="/admin/buybacks"
+      class="px-3.5 py-2 border border-line rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50 transition"
+    >
+      Hủy &amp; Quay lại
+    </a>
+  </div>
+
+  {error && (
+    <div class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex items-center gap-2">
+      <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
+      <span>{error}</span>
+    </div>
+  )}
+
+  <form id="buybackForm" method="post" action="/api/admin/buybacks">
+    <input type="hidden" name="buyback_payload" id="buybackPayload" />
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- CỘT TRÁI (2/3): DANH SÁCH MẶT HÀNG THU MUA -->
+      <div class="lg:col-span-2 space-y-6">
+        <!-- KHỐI CHỌN HÀNG THU MUA -->
+        <div class="bg-white rounded-xl border border-line p-5 shadow-sm">
+          <div class="flex items-center justify-between border-b border-line pb-4 mb-4">
+            <div>
+              <h2 class="text-base font-bold text-gray-900">Chi Tiết Hàng Hóa Thu Mua</h2>
+              <p class="text-xs text-gray-500 mt-0.5">Thu máy bắn cá, bo mạch có Mã bộ hoặc linh kiện phụ kiện số lượng cũ</p>
+            </div>
+            <button
+              type="button"
+              id="addItemBtn"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 text-brand font-semibold text-xs hover:bg-blue-100 transition border border-blue-200"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+              Thêm Món Thu Mua
+            </button>
+          </div>
+
+          <!-- BẢNG CÁC DÒNG MẶT HÀNG -->
+          <div id="itemsContainer" class="space-y-4">
+            <!-- Render động bằng Javascript -->
+          </div>
+
+          <!-- TỔNG KẾT TIỀN THU MUA -->
+          <div class="mt-6 pt-4 border-t border-line flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-gray-50/70 p-4 rounded-xl">
+            <div class="text-xs text-gray-500">
+              Tổng số món thu mua: <span id="totalItemsCount" class="font-bold text-gray-900">0</span>
+            </div>
+            <div class="flex items-baseline gap-3">
+              <span class="text-sm font-medium text-gray-700">Tổng tiền chi thu mua:</span>
+              <span id="displayTotalSpend" class="text-2xl font-normal tabular-nums text-red-600">0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- GHI CHÚ THU MUA -->
+        <div class="bg-white rounded-xl border border-line p-5 shadow-sm">
+          <h2 class="text-base font-bold text-gray-900 mb-2">Ghi Chú Thu Mua &amp; Thỏa Thuận Bàn Giao</h2>
+          <textarea
+            id="buybackNote"
+            rows="3"
+            placeholder="Ghi chú về nguồn gốc máy, lý do thanh lý, cam kết máy không tranh chấp, phụ kiện đi kèm (dây nguồn, khóa, chìa...)..."
+            class="w-full text-sm border border-line rounded-lg p-3 focus:outline-none focus:border-brand"
+          ></textarea>
+        </div>
+      </div>
+
+      <!-- CỘT PHẢI (1/3): THÔNG TIN NGƯỜI BÁN & XUẤT QUỸ -->
+      <div class="space-y-6">
+        <!-- THÔNG TIN NGƯỜI BÁN (KHÁCH HÀNG) -->
+        <div class="bg-white rounded-xl border border-line p-5 shadow-sm">
+          <h2 class="text-base font-bold text-gray-900 border-b border-line pb-3 mb-4">Người Bán (Khách Hàng)</h2>
+
+          <div class="space-y-4">
+            <div>
+              <label class="block text-xs font-semibold text-gray-700 mb-1">Chọn từ danh bạ khách hàng</label>
+              <select
+                id="customerSelect"
+                class="w-full py-2 px-3 text-sm border border-line rounded-lg focus:outline-none focus:border-brand bg-white"
+              >
+                <option value="">-- Khách vãng lai / Nhập mới --</option>
+                {customers.map((c) => (
+                  <option
+                    value={c.id}
+                    data-name={c.name}
+                    data-phone={c.phone || ''}
+                    data-address={c.address || ''}
+                  >
+                    {c.name} {c.phone ? `(${c.phone})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-gray-700 mb-1">Tên người bán <span class="text-red-500">*</span></label>
+              <input
+                type="text"
+                id="custName"
+                placeholder="Ví dụ: Anh Minh Cần Thơ"
+                required
+                class="w-full py-2 px-3 text-sm border border-line rounded-lg focus:outline-none focus:border-brand"
+              />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-gray-700 mb-1">Số điện thoại</label>
+              <input
+                type="tel"
+                id="custPhone"
+                placeholder="09xx xxx xxx"
+                class="w-full py-2 px-3 text-sm border border-line rounded-lg focus:outline-none focus:border-brand"
+              />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-gray-700 mb-1">Địa chỉ (Hỗ trợ dán bóc tách tự động)</label>
+              <input
+                type="text"
+                id="custAddress"
+                placeholder="Số nhà, Phường/Xã, Tỉnh/TP..."
+                class="w-full py-2 px-3 text-sm border border-line rounded-lg focus:outline-none focus:border-brand"
+              />
+              <span id="addressNoticeBadge" class="hidden mt-1.5 inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-100 text-emerald-800">
+                ✨ Đã tách địa chỉ
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- HÌNH THỨC CHI TIỀN & SỔ QUỸ -->
+        <div class="bg-white rounded-xl border border-line p-5 shadow-sm">
+          <h2 class="text-base font-bold text-gray-900 border-b border-line pb-3 mb-4">Xuất Chi Sổ Quỹ (Cashbook)</h2>
+
+          <div class="space-y-4">
+            <div>
+              <label class="block text-xs font-semibold text-gray-700 mb-2">Hình thức chi trả tiền cho khách</label>
+              <div class="grid grid-cols-2 gap-3">
+                <label class="flex items-center gap-2 p-3 border border-line rounded-xl cursor-pointer hover:bg-gray-50 has-[:checked]:border-brand has-[:checked]:bg-blue-50/50">
+                  <input type="radio" name="payment_method_radio" value="CASH" checked class="text-brand focus:ring-brand" />
+                  <div class="text-xs font-medium text-gray-900">Tiền mặt két</div>
+                </label>
+                <label class="flex items-center gap-2 p-3 border border-line rounded-xl cursor-pointer hover:bg-gray-50 has-[:checked]:border-brand has-[:checked]:bg-blue-50/50">
+                  <input type="radio" name="payment_method_radio" value="BANK" class="text-brand focus:ring-brand" />
+                  <div class="text-xs font-medium text-gray-900">Chuyển khoản</div>
+                </label>
+              </div>
+            </div>
+
+            <div id="bankAccountBox" class="hidden">
+              <label class="block text-xs font-semibold text-gray-700 mb-1">Tài khoản ngân hàng xuất chi</label>
+              <select
+                id="bankAccountSelect"
+                class="w-full py-2 px-3 text-sm border border-line rounded-lg focus:outline-none focus:border-brand bg-white"
+              >
+                <option value="Vietcombank">Vietcombank (TK Chính Cửa Hàng)</option>
+                <option value="MB Bank">MB Bank (Tài khoản POS)</option>
+                <option value="Techcombank">Techcombank</option>
+                <option value="BIDV">BIDV</option>
+              </select>
+            </div>
+
+            <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+              💡 Hệ thống sẽ <strong>tự động sinh Phiếu Chi (PCxxxx)</strong> loại <em>"Chi Thu mua máy cũ"</em> vào Sổ Quỹ ngay khi lưu.
+            </div>
+          </div>
+        </div>
+
+        <!-- NÚT HOÀN TẤT LẬP PHIẾU -->
+        <button
+          type="button"
+          id="submitBuybackBtn"
+          class="w-full py-3.5 px-4 rounded-xl bg-brand text-white font-bold text-base shadow-lg shadow-blue-500/25 hover:bg-blue-700 transition flex items-center justify-center gap-2"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+          Lưu Phiếu &amp; Xuất Tiền Thu Mua
+        </button>
+      </div>
+    </div>
+  </form>
+
+  <!-- DỮ LIỆU JSON ĐỂ JAVASCRIPT XỬ LÝ -->
+  <script is:inline define:vars={{ products, productTypes, soldUnits }}>
+    window.KGAME_PRODUCTS = products;
+    window.KGAME_PRODUCT_TYPES = productTypes;
+    window.KGAME_SOLD_UNITS = soldUnits;
+  </script>
+
+  <script>
+  import { requireSelect } from '../../../features/kgame/formElements';
+  import { parseAdminApiResponse } from '../../../features/kgame/apiResponse';
+    const products = (window as any).KGAME_PRODUCTS || [];
+    const productTypes = (window as any).KGAME_PRODUCT_TYPES || [];
+    const soldUnits = (window as any).KGAME_SOLD_UNITS || [];
+
+    const itemsContainer = document.getElementById('itemsContainer') as HTMLElement;
+    const addItemBtn = document.getElementById('addItemBtn');
+    const displayTotalSpend = document.getElementById('displayTotalSpend') as HTMLElement;
+    const totalItemsCount = document.getElementById('totalItemsCount') as HTMLElement;
+    const customerSelect = requireSelect('#customerSelect');
+    const custName = document.getElementById('custName') as HTMLInputElement;
+    const custPhone = document.getElementById('custPhone') as HTMLInputElement;
+    const custAddress = document.getElementById('custAddress') as HTMLInputElement;
+    const addressNoticeBadge = document.getElementById('addressNoticeBadge') as HTMLElement;
+    const bankAccountBox = document.getElementById('bankAccountBox') as HTMLElement;
+    const submitBuybackBtn = document.getElementById('submitBuybackBtn') as HTMLButtonElement;
+    const buybackForm = document.getElementById('buybackForm') as HTMLFormElement;
+    const buybackPayload = document.getElementById('buybackPayload') as HTMLInputElement;
+
+    let itemCount = 0;
+
+    function formatVND(val: number): string {
+      if (!val || isNaN(val)) return '0';
+      return new Intl.NumberFormat('en-US').format(val);
+    }
+
+    // 1. Chuyển đổi Khách hàng khi chọn dropdown
+    customerSelect?.addEventListener('change', () => {
+      const opt = customerSelect.selectedOptions[0];
+      if (opt && opt.value) {
+        custName.value = opt.getAttribute('data-name') || '';
+        custPhone.value = opt.getAttribute('data-phone') || '';
+        custAddress.value = opt.getAttribute('data-address') || '';
+      }
+    });
+
+    // 2. Bóc tách địa chỉ thông minh khi paste vào custAddress
+    custAddress?.addEventListener('paste', (e: ClipboardEvent) => {
+      const pasted = e.clipboardData?.getData('text');
+      if (pasted && pasted.length > 5) {
+        setTimeout(async () => {
+          try {
+            const res = await fetch(`/api/admin/geo?type=parse&text=${encodeURIComponent(pasted.trim())}`);
+            const json = parseAdminApiResponse(await res.json());
+            if (json.success && json.data) {
+              const province = typeof json.data.province === 'string' ? json.data.province : '';
+              const ward = typeof json.data.ward === 'string' ? json.data.ward : '';
+              const detail = typeof json.data.detail === 'string' ? json.data.detail : '';
+              const converted_from = typeof json.data.converted_from === 'string' ? json.data.converted_from : '';
+              if (province || ward) {
+                custAddress.value = [detail, ward, province].filter(Boolean).join(', ');
+                if (addressNoticeBadge) {
+                  addressNoticeBadge.textContent = converted_from
+                    ? `✨ Tự động quy đổi: ${converted_from} (${province || ''})`
+                    : `✨ Đã tách: ${province || ''} ${ward ? '• ' + ward : ''}`;
+                  addressNoticeBadge.classList.remove('hidden');
+                  setTimeout(() => addressNoticeBadge.classList.add('hidden'), 5000);
+                }
+              }
+            }
+          } catch {}
+        }, 50);
+      }
+    });
+
+    // 3. Toggle hiển thị tài khoản ngân hàng
+    document.querySelectorAll('input[name="payment_method_radio"]').forEach((r) => {
+      r.addEventListener('change', () => {
+        const val = (document.querySelector('input[name="payment_method_radio"]:checked') as HTMLInputElement)?.value;
+        if (bankAccountBox) {
+          bankAccountBox.style.display = val === 'BANK' ? 'block' : 'none';
+        }
+      });
+    });
+
+    // 4. Thêm một dòng mặt hàng thu mua
+    function addItemRow(defaultUnitId?: number) {
+      itemCount++;
+      const rowId = `itemRow_${itemCount}`;
+      const div = document.createElement('div');
+      div.id = rowId;
+      div.className = 'p-4 rounded-xl border border-line bg-gray-50/50 hover:bg-white hover:border-blue-300 transition space-y-3';
+
+      div.innerHTML = `
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-brand text-white font-bold text-xs">
+              ${itemCount}
+            </span>
+            <span class="text-xs font-bold text-gray-800">Món thu mua #${itemCount}</span>
+          </div>
+          <button type="button" class="text-gray-400 hover:text-red-600 transition" onclick="document.getElementById('${rowId}').remove(); recalcBuybackTotals();">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <!-- CHỌN SẢN PHẨM -->
+          <div>
+            <label class="block text-xs font-semibold text-gray-700 mb-1">Sản phẩm <span class="text-red-500">*</span></label>
+            <select class="prod-select w-full py-2 px-3 text-xs border border-line rounded-lg focus:outline-none focus:border-brand bg-white" required>
+              <option value="">-- Chọn sản phẩm --</option>
+              ${products.map((p: any) => `<option value="${p.id}" data-tracking="${p.tracking_mode}">${p.name} (${p.tracking_mode === 'CODE' ? 'Quản lý Mã bộ' : 'Số lượng'})</option>`).join('')}
+            </select>
+          </div>
+
+          <!-- CHỌN PHIÊN BẢN -->
+          <div>
+            <label class="block text-xs font-semibold text-gray-700 mb-1">Phiên bản / Loại <span class="text-red-500">*</span></label>
+            <select class="type-select w-full py-2 px-3 text-xs border border-line rounded-lg focus:outline-none focus:border-brand bg-white" required>
+              <option value="">-- Chọn phiên bản --</option>
+            </select>
+          </div>
+
+          <!-- SỐ LƯỢNG -->
+          <div class="qty-col">
+            <label class="block text-xs font-semibold text-gray-700 mb-1">Số lượng <span class="text-red-500">*</span></label>
+            <input type="number" min="1" value="1" class="qty-input w-full py-2 px-3 text-xs border border-line rounded-lg focus:outline-none focus:border-brand" required />
+          </div>
+        </div>
+
+        <!-- DÒNG MÃ BỘ PROGRAM CODE (DÀNH CHO MÁY / BO MẠCH) -->
+        <div class="code-tracking-box hidden bg-blue-50/60 p-3 rounded-lg border border-blue-200 space-y-2">
+          <div class="text-[11px] font-bold text-blue-900 flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/></svg>
+            Quản Lý Mã Bộ Cá Thể Hóa (Program Code)
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-[11px] font-medium text-gray-700 mb-0.5">Chọn máy cũ Kgame từng bán (nếu có)</label>
+              <select class="sold-unit-select w-full py-1.5 px-2.5 text-xs border border-blue-300 rounded-md bg-white">
+                <option value="">-- Không có (Máy ngoài mang đến) --</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[11px] font-medium text-gray-700 mb-0.5">Mã bộ / Sê-ri thực tế</label>
+              <div class="flex gap-1.5">
+                <input type="text" placeholder="VD: 777-62099888" class="program-code-input w-full py-1.5 px-2.5 text-xs border border-blue-300 rounded-md bg-white" />
+                <button type="button" class="gen-code-btn px-2.5 py-1 text-[11px] font-semibold bg-white border border-blue-300 text-brand rounded-md hover:bg-blue-100 whitespace-nowrap">
+                  Tự sinh mã
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- GIÁ THU MUA & TÌNH TRẠNG NGOẠI QUAN -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+          <div>
+            <label class="block text-xs font-semibold text-gray-700 mb-1">Giá thu mua (món) <span class="text-red-500">*</span></label>
+            <input type="text" placeholder="VD: 5,000,000" class="price-input w-full py-2 px-3 text-xs border border-line rounded-lg font-normal tabular-nums text-red-600 focus:outline-none focus:border-brand" required />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-700 mb-1">Ghi chú tình trạng ngoại quan / kỹ thuật</label>
+            <input type="text" placeholder="VD: Trầy xước nhẹ mặt kính, bàn phím còn tốt..." class="note-input w-full py-2 px-3 text-xs border border-line rounded-lg focus:outline-none focus:border-brand" />
+          </div>
+        </div>
+      `;
+
+      itemsContainer.appendChild(div);
+
+      // Gắn sự kiện cho các ô trong dòng:
+      const prodSelect = requireSelect('.prod-select', div);
+      const typeSelect = requireSelect('.type-select', div);
+      const qtyCol = div.querySelector('.qty-col') as HTMLElement;
+      const qtyInput = div.querySelector('.qty-input') as HTMLInputElement;
+      const codeBox = div.querySelector('.code-tracking-box') as HTMLElement;
+      const soldUnitSelect = requireSelect('.sold-unit-select', div);
+      const programCodeInput = div.querySelector('.program-code-input') as HTMLInputElement;
+      const genCodeBtn = div.querySelector('.gen-code-btn') as HTMLButtonElement;
+      const priceInput = div.querySelector('.price-input') as HTMLInputElement;
+
+      prodSelect.addEventListener('change', () => {
+        const prodId = Number(prodSelect.value);
+        const opt = prodSelect.selectedOptions[0];
+        const isCode = opt?.getAttribute('data-tracking') === 'CODE';
+
+        // Lọc phiên bản theo sản phẩm
+        const types = productTypes.filter((t: any) => t.product_id === prodId);
+        typeSelect.innerHTML = '<option value="">-- Chọn phiên bản --</option>' +
+          types.map((t: any) => `<option value="${t.id}">${t.name}</option>`).join('');
+
+        if (isCode) {
+          codeBox.classList.remove('hidden');
+          qtyInput.value = '1';
+          qtyCol.style.opacity = '0.5';
+          qtyInput.disabled = true;
+
+          // Lọc các máy Kgame từng bán thuộc sản phẩm này
+          const units = soldUnits.filter((u: any) => u.product_id === prodId);
+          soldUnitSelect.innerHTML = '<option value="">-- Không có (Máy ngoài mang đến) --</option>' +
+            units.map((u: any) => `<option value="${u.id}" data-type="${u.product_type_id}" data-code="${u.program_code}">${u.program_code} (${u.type_name || ''})</option>`).join('');
+        } else {
+          codeBox.classList.add('hidden');
+          qtyCol.style.opacity = '1';
+          qtyInput.disabled = false;
+        }
+        recalcBuybackTotals();
+      });
+
+      soldUnitSelect?.addEventListener('change', () => {
+        const opt = soldUnitSelect.selectedOptions[0];
+        if (opt && opt.value) {
+          const tId = opt.getAttribute('data-type');
+          const code = opt.getAttribute('data-code');
+          if (tId) typeSelect.value = tId;
+          if (code) programCodeInput.value = code;
+        }
+      });
+
+      genCodeBtn?.addEventListener('click', () => {
+        const rand = Math.floor(10000000 + Math.random() * 90000000);
+        programCodeInput.value = `777-${rand}`;
+      });
+
+      priceInput?.addEventListener('input', () => {
+        let val = priceInput.value.replace(/\D/g, '');
+        if (val) {
+          priceInput.value = new Intl.NumberFormat('en-US').format(Number(val));
+        }
+        recalcBuybackTotals();
+      });
+
+      qtyInput?.addEventListener('input', () => {
+        recalcBuybackTotals();
+      });
+
+      recalcBuybackTotals();
+    }
+
+    // Tính tổng tiền chi thu mua
+    function recalcBuybackTotals() {
+      let total = 0;
+      let count = 0;
+      const rows = itemsContainer.querySelectorAll('[id^="itemRow_"]');
+      rows.forEach((row) => {
+        const qtyInput = row.querySelector('.qty-input') as HTMLInputElement;
+        const priceInput = row.querySelector('.price-input') as HTMLInputElement;
+        const qty = qtyInput && !qtyInput.disabled ? Math.max(1, Number(qtyInput.value) || 1) : 1;
+        const price = priceInput ? Number(priceInput.value.replace(/\D/g, '')) || 0 : 0;
+        total += qty * price;
+        count += qty;
+      });
+
+      if (displayTotalSpend) displayTotalSpend.textContent = formatVND(total);
+      if (totalItemsCount) totalItemsCount.textContent = String(count);
+    };
+
+    addItemBtn?.addEventListener('click', () => addItemRow());
+
+    // Thêm sẵn 1 dòng ban đầu khi tải trang
+    addItemRow();
+
+    // 5. Xử lý lưu phiếu thu mua
+    submitBuybackBtn?.addEventListener('click', () => {
+      const name = custName.value.trim();
+      if (!name) {
+        alert('Vui lòng nhập tên người bán (khách hàng)');
+        custName.focus();
+        return;
+      }
+
+      const rows = itemsContainer.querySelectorAll('[id^="itemRow_"]');
+      if (rows.length === 0) {
+        alert('Vui lòng thêm ít nhất 1 món hàng thu mua');
+        return;
+      }
+
+      const items: any[] = [];
+      let valid = true;
+
+      rows.forEach((row, idx) => {
+        const prodSelect = requireSelect('.prod-select', row);
+        const typeSelect = requireSelect('.type-select', row);
+        const qtyInput = row.querySelector('.qty-input') as HTMLInputElement;
+        const priceInput = row.querySelector('.price-input') as HTMLInputElement;
+        const soldUnitSelect = requireSelect('.sold-unit-select', row);
+        const programCodeInput = row.querySelector('.program-code-input') as HTMLInputElement;
+        const noteInput = row.querySelector('.note-input') as HTMLInputElement;
+
+        const prodId = Number(prodSelect.value);
+        const typeId = Number(typeSelect.value);
+        const qty = qtyInput && !qtyInput.disabled ? Math.max(1, Number(qtyInput.value) || 1) : 1;
+        const price = Number(priceInput.value.replace(/\D/g, '')) || 0;
+        const unitId = soldUnitSelect ? Number(soldUnitSelect.value) || null : null;
+        const programCode = programCodeInput ? programCodeInput.value.trim() : null;
+        const conditionNote = noteInput ? noteInput.value.trim() : null;
+
+        if (!prodId || !typeId) {
+          alert(`Dòng #${idx + 1}: Vui lòng chọn sản phẩm và phiên bản`);
+          valid = false;
+          return;
+        }
+
+        if (price <= 0) {
+          alert(`Dòng #${idx + 1}: Vui lòng nhập giá thu mua hợp lệ`);
+          valid = false;
+          return;
+        }
+
+        items.push({
+          product_id: prodId,
+          product_type_id: typeId,
+          product_unit_id: unitId,
+          program_code: programCode,
+          condition: 'QSD',
+          condition_note: conditionNote,
+          quantity: qty,
+          purchase_price_cents: price
+        });
+      });
+
+      if (!valid) return;
+
+      const paymentMethodRadio = document.querySelector('input[name="payment_method_radio"]:checked') as HTMLInputElement;
+      const paymentMethod = paymentMethodRadio ? paymentMethodRadio.value : 'CASH';
+      const bankAccountSelect = requireSelect('#bankAccountSelect');
+      const bankAccount = paymentMethod === 'BANK' ? bankAccountSelect?.value : null;
+      const buybackNote = document.getElementById('buybackNote') as HTMLTextAreaElement;
+
+      const payload = {
+        customer_id: customerSelect.value ? Number(customerSelect.value) : undefined,
+        customer_name: name,
+        customer_phone: custPhone.value.trim() || undefined,
+        customer_address: custAddress.value.trim() || undefined,
+        payment_method: paymentMethod,
+        bank_account: bankAccount,
+        note: buybackNote ? buybackNote.value.trim() : undefined,
+        items: items
+      };
+
+      buybackPayload.value = JSON.stringify(payload);
+      buybackForm.submit();
+    });
+  </script>
+</AdminLayout>

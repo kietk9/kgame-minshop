@@ -1,0 +1,8 @@
+✓ H05: first login forces personal password; direct sales API blocked until change; body account ID and role cannot redirect credential update
+✓ H01: production-mode anonymous gate, owner account management and individual staff login work
+✓ H02: direct API calls, alternate form/JSON actions, configuration, unknown paths and cross-origin staff writes are denied
+✓ P01: default cashier cannot forge selling price, discount, credit or debt; denied writes leave orders unchanged and catalog cost is absent
+✓ H03: cashier completes sale, payment and preorder fulfillment; stock changes correctly and forged actor is replaced by signed-in staff identity
+✓ RD06: granted staff disposes rejected return through HTTP; viewer and foreign origin denied; actor trusted, history visible and original cost omitted
+✓ P02: owner custom grants override template, revoke sessions, enable allowed routes/actions and protect costs/reports; staff cannot self-grant
+✓ H04: role change and logout revoke sessions immediately; stale staff cookies cannot fall back to owner

@@ -1,0 +1,9 @@
+Tôi tiếp tục KGAME trên Linux từ gói bàn giao 29/09/2026. Hãy đọc docs/linux-handoff/START_HERE.md, docs/linux-handoff/CURRENT_STATE.md, docs/linux-handoff/REVIEW_AND_LIMITS.md, AGENTS.md, docs/MASTER_AUDIT_AND_SYSTEM_HANDOVER.md và các hợp đồng nghiệp vụ cùng PHASE_1_WAVE_D16_COMPLETION.md. Đường dẫn tương đối ở đây tính từ project.
+
+Mốc code là D16, chưa triển khai D17. Chạy npm run verify trên Linux và ghi bằng chứng trước khi sửa. Nếu thiếu thư viện, dùng khóa phiên bản root và mcp theo LINUX_SETUP.md; hỏi trước khi cài thêm gói ngoài các phụ thuộc đã chốt. Không deploy/publish. Không dùng secrets, database, tài khoản hay phiên Mac. Dữ liệu thử cố ý có tên trùng: không tự gộp/xóa.
+
+Phạm vi: một cửa hàng/một kho; chặn xuất thiếu tồn, cho đặt trước. Hủy giữ lịch sử tiền thật; hàng đã giao dùng trả hàng. Đọc CURRENT_STATE.md để phân biệt nghiệp vụ đã làm và dự kiến. Bước tiếp theo sau baseline là D17: chuyển phần cần hoàn cho khách sang số dư, theo lựa chọn của chủ cửa hàng. Trước khi code, đối chiếu tài khoản nghĩa vụ hoàn/số dư/tiền và các báo cáo, viết tình huống kiểm chứng. Không tạo phiếu chi giả để chuyển số dư. Không sửa generated refunded_cents. Không để hoàn tiền và chuyển số dư đồng thời vượt nghĩa vụ. Không thay đổi migration đã chạy.
+
+Làm từng nghiệp vụ trọn vẹn từ máy chủ, dữ liệu, giao diện đến kiểm thử; không chỉ sửa giao diện. Dùng test DB độc lập; kiểm thử thiếu quyền, double click/retry, trả/hủy một phần, số dư/tiền/tồn trước-sau và rollback. Chỉ kết luận xong khi verify đạt và đã kiểm tra giao diện nếu thay đổi UI. Ghi tệp thay đổi, kết quả và phần chưa xong vào bàn giao để tác vụ sau tiếp tục được. Không tự thêm nghiệp vụ chưa thống nhất.
+
+Nếu dùng AI local phụ giúp, giao một phần nhỏ với danh sách tệp/phạm vi rõ ràng và yêu cầu trả diff + test; không cho hai AI cùng ghi một checkout. Mọi thay đổi tiền, tồn, phân quyền phải được rà soát độc lập trước khi đưa vào nhánh chính.

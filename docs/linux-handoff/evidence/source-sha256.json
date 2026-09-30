@@ -1,0 +1,14 @@
+{
+  "package.json": "f8f54a398531be216f869bf4c578c6d7af49688671cbda56c7769bc8699a584d",
+  "migrations/0066_kgame_return_disposals.sql": "6cdceebde649bd2d9846a1bf3a595742e53877535f1518cafcad040cc5810cf4",
+  "src/features/auth/staffPolicy.ts": "c90e40c9fd8e1074071888b9440b0ecc4ea4c4aec1992d4a3168d2673c56e5a6",
+  "src/features/auth/permissions.test.ts": "d8302ab1276d8303c352eac2d153b2cc070f9cfe25e4ca425a11773bfb94420e",
+  "src/features/kgame/returnDisposal.ts": "1b656ae14843c0d39f8c7a2818a006cbb684e9f3f219f38e4d359553c89f360f",
+  "src/features/kgame/pendingActions.ts": "9fa236a7948cdffe371cf8ef1d1e2e92d9f770f7949ef86c77ab00b9481a6974",
+  "src/features/kgame/KgameOrderDetail.astro": "bf94cd71608958cfb35cebbe2bdc516d5b0cfc29b7b84bdd33c8c1ef2c8a8ec0",
+  "src/pages/admin/orders/[id].astro": "3fc1bce0a0d30e099862d220ae8a35af58e0f05281271d37c7271cb031eab091",
+  "src/pages/admin/pending-actions.astro": "bc1dd1108b8a9899ede2118c5acc779ea96fb68952d334700eb4172d9ca75fa7",
+  "src/pages/api/admin/return-disposals.ts": "c2cfef4099b181933c8298c43f73f944990cda1791fc55ace9724958125cdd64",
+  "test/integration/kgame-return-disposal.mjs": "6edd59abec1f4d90dd71f36b779d01cafccf71045756024d8a8669ef49286a37",
+  "test/integration/kgame-staff-http.mjs": "007e3dfb54326b3fd60e41658af402ae0b51c7235c4aa3c763a5e61a863c29ee"
+}

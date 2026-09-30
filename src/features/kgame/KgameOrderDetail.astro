@@ -1,0 +1,697 @@
+---
+import { hasPermission } from '../auth/permissions';
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { allowedOrderStatuses } from './orderStatus.ts';
+
+interface Props {
+  order: any;
+  success?: string | null;
+  error?: string | null;
+  creditCustomers?: { id: number; name: string; phone?: string | null }[];
+}
+
+const { order, success, error, creditCustomers = [] } = Astro.props;
+const isOwner = Astro.locals.adminPrincipal?.role === 'OWNER';
+const can=(p:Parameters<typeof hasPermission>[1])=>hasPermission(Astro.locals.adminPrincipal,p);
+const canCancel = can('sales.cancel') && !['CANCELLED','COMPLETED','DELIVERING'].includes(order.order_status);
+const editableStatuses = isOwner ? allowedOrderStatuses(order.order_type, order.order_status) : [];
+
+const formatNumber = (val: number) => {
+  if (!val || isNaN(val)) return '0';
+  return new Intl.NumberFormat('en-US').format(val);
+};
+const formatVND = formatNumber;
+
+const formatDate = (iso: string) => {
+  if (!iso) return '-';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
+  } catch {
+    return iso;
+  }
+};
+
+const statusLabels: Record<string, { label: string; color: string }> = {
+  PENDING: { label: 'Chờ xử lý', color: 'bg-amber-100 text-amber-800 border-amber-200' },
+  PROCESSING: { label: 'Đang xử lý / Đóng hàng', color: 'bg-blue-100 text-blue-800 border-blue-200' },
+  DELIVERING: { label: 'Đang giao xe / Vận chuyển', color: 'bg-purple-100 text-purple-800 border-purple-200' },
+  COMPLETED: { label: 'Đã hoàn tất', color: 'bg-emerald-100 text-emerald-800 border-emerald-200' },
+  CANCELLED: { label: 'Đã hủy', color: 'bg-red-100 text-red-800 border-red-200' },
+};
+
+const paymentStatusLabels: Record<string, { label: string; color: string }> = {
+  PAID: { label: 'Đã thanh toán đủ', color: 'bg-emerald-100 text-emerald-800 border-emerald-200' },
+  PARTIALLY_PAID: { label: 'Đã đặt cọc (Còn nợ)', color: 'bg-amber-100 text-amber-800 border-amber-200' },
+  UNPAID: { label: 'Chưa thanh toán (Công nợ)', color: 'bg-red-100 text-red-800 border-red-200' },
+};
+
+const remainingDebt = order.order_status === 'CANCELLED' ? 0 : Math.max(0, order.cod_amount_cents);
+---
+
+<AdminLayout title={`Đơn hàng ${order.order_code}`} active="orders">
+  <!-- HEADER & TOOLBAR -->
+  <div class="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <div>
+      <div class="flex items-center gap-3">
+        <a href="/admin/orders" class="text-gray-500 hover:text-gray-800 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+        </a>
+        <h1 class="text-2xl font-bold text-gray-900 flex items-center gap-2">
+          Đơn Hàng: <span class="font-normal text-brand">{order.order_code}</span>
+        </h1>
+        {order.order_type === 'PREORDER' ? (
+          <span class="px-2.5 py-1 text-xs font-bold rounded-full border bg-amber-100 text-amber-800 border-amber-300">
+            📋 Đặt hàng
+          </span>
+        ) : (
+          <span class="px-2.5 py-1 text-xs font-semibold rounded-full border bg-blue-100 text-blue-800 border-blue-200">
+            ⚡ Bán hàng
+          </span>
+        )}
+        <span class={`px-2.5 py-1 text-xs font-semibold rounded-full border ${statusLabels[order.order_status]?.color || 'bg-gray-100 text-gray-800'}`}>
+          {statusLabels[order.order_status]?.label || order.order_status}
+        </span>
+        <span class={`px-2.5 py-1 text-xs font-semibold rounded-full border ${paymentStatusLabels[order.payment_status]?.color || 'bg-gray-100 text-gray-800'}`}>
+          {order.refund_obligation?.amount_cents > order.refund_obligation?.settled_cents ? 'Chờ hoàn tiền khách' : order.order_status === 'CANCELLED' ? (order.refund_obligation?.amount_cents > order.refund_obligation?.settled_cents ? 'Chờ hoàn tiền khách' : order.credit_issued_cents > 0 ? 'Đã hoàn số dư khách' : 'Không còn công nợ') : paymentStatusLabels[order.payment_status]?.label || order.payment_status}
+        </span>
+      </div>
+      <p class="mt-1 text-xs text-gray-500">
+        Khởi tạo lúc: <strong class="text-gray-700">{formatDate(order.created_at)}</strong> — Kênh: <strong class="text-gray-700">POS Bán Lẻ Kgame</strong>
+      </p>
+    </div>
+
+    <!-- ACTION BUTTONS -->
+    <div class="flex flex-wrap items-center gap-2">
+      {can('sales.fulfill') && order.order_type === 'PREORDER' && !['COMPLETED','CANCELLED'].includes(order.order_status) ? (
+        <a
+          href={`/admin/sale?load_preorder=${order.id}`}
+          class="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-extrabold text-white bg-amber-600 rounded-lg shadow hover:bg-amber-700 transition"
+          title="Mở lên màn hình Bán hàng để nạp giỏ hàng và thanh toán"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          Xử lý đơn (POS)
+        </a>
+      ) : null}
+
+      {can('sales.fulfill') && order.order_type === 'PREORDER' && !['COMPLETED','CANCELLED'].includes(order.order_status) ? (
+        <button
+          type="button"
+          id="btnOpenFulfillModal"
+          class="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 rounded-lg shadow hover:bg-emerald-700 transition cursor-pointer"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+          Xuất kho & Hoàn tất
+        </button>
+      ) : null}
+
+      <a
+        href={`/admin/orders/${order.id}/print`}
+        target="_blank"
+        class="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-gray-700 bg-white border border-line rounded-lg shadow-sm hover:bg-gray-50 transition"
+      >
+        <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+        In Hóa Đơn & Bảo Hành
+      </a>
+
+      {can('sales.collect') && remainingDebt > 0 && order.order_status !== 'CANCELLED' && (
+        <button
+          type="button"
+          id="btnOpenPayModal"
+          class="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 rounded-lg shadow hover:bg-emerald-700 transition cursor-pointer"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+          Thu Thêm Tiền POS ({formatVND(remainingDebt)})
+        </button>
+      )}
+
+      <!-- CHUYỂN TRẠNG THÁI -->
+      {editableStatuses.length > 0 && <form method="POST" action="/api/admin/orders" class="inline-block">
+        <input type="hidden" name="action" value="update_status" />
+        <input type="hidden" name="order_id" value={order.id} />
+        <select
+          name="order_status"
+          onchange="this.form.submit()"
+          class="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-medium text-gray-800 shadow-sm focus:border-brand focus:ring-1 focus:ring-brand cursor-pointer"
+        >
+          <option value={order.order_status} selected>{statusLabels[order.order_status]?.label || 'Trạng thái hiện tại'}</option>
+          {editableStatuses.map(status => <option value={status}>{statusLabels[status]?.label || status}</option>)}
+        </select>
+      </form>}
+      {canCancel && <button type="button" id="btnOpenCancelModal" class="rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50">Hủy đơn</button>}
+    </div>
+  </div>
+
+  {can('sales.fulfill') && order.order_type === 'PREORDER' && !['COMPLETED','CANCELLED'].includes(order.order_status) && (
+    <div class="mb-6 rounded-xl border border-amber-300 bg-amber-50/90 p-4 text-sm text-amber-900 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shadow-sm">
+      <div class="flex items-center gap-3">
+        <span class="text-3xl">📋</span>
+        <div>
+          <div class="font-bold text-base text-amber-950 flex items-center gap-2">
+            <span>Đặt hàng chưa xuất kho</span>
+            <span class="px-2 py-0.5 rounded bg-amber-200 text-amber-900 font-semibold text-xs">Chờ xử lý</span>
+          </div>
+          <div class="text-xs text-amber-800 mt-1">
+            Khách đã cọc: <strong>{formatVND(order.paid_amount_cents)}</strong> &bull; Còn nợ cần thu khi giao: <strong class="text-red-600 font-bold">{formatVND(remainingDebt)}</strong>.
+            <span class="ml-1 text-gray-600">(Hàng hóa chưa bị trừ tồn kho thực tế).</span>
+          </div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <a
+          href={`/admin/sale?load_preorder=${order.id}`}
+          class="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow transition flex items-center gap-1.5"
+        >
+          <span>⚡ Mở lên POS bán</span>
+        </a>
+      </div>
+    </div>
+  )}
+
+  {success && (
+    <div class="mb-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 flex items-center gap-2">
+      <svg class="w-5 h-5 text-emerald-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+      <span>
+        {success === 'created' && 'Tạo đơn thành công! Đã tự động trừ kho và lập Phiếu Thu vào Sổ Quỹ.'}
+        {success === 'fulfilled' && 'Đã xử lý xuất bán đặt hàng thành công! Đã trừ tồn kho và ghi nhận thanh toán hoàn tất.'}
+        {success === 'payment_added' && 'Ghi nhận thanh toán thành công! Đã lập thêm Phiếu Thu vào Sổ Quỹ.'}
+        {success === 'status_updated' && 'Cập nhật trạng thái đơn thành công!'}
+        {success === 'return_disposed' && 'Đã ghi phiếu tiêu hủy hàng lỗi. Tồn bán, giá vốn đã ghi và tiền hoàn không thay đổi.'}
+        {success === 'return_inspected' && 'Đã ghi kết quả kiểm tra hàng trả; kho và giá vốn được cập nhật theo kết quả.'}
+        {success === 'refund_paid' && 'Đã ghi nhận tiền thực trả và lập phiếu chi hoàn tiền.'}
+      </span>
+    </div>
+  )}
+
+  {error && (
+    <div class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex items-center gap-2">
+      <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
+      <span>{error}</span>
+    </div>
+  )}
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    
+    <!-- CỘT CHÍNH (2/3): MẶT HÀNG & GIAO NHẬN -->
+    <div class="lg:col-span-2 space-y-6">
+      
+      <!-- BẢNG MẶT HÀNG -->
+      <div class="bg-white rounded-xl border border-line overflow-hidden shadow-sm">
+        <div class="p-4 bg-gray-50 border-b border-line flex items-center justify-between">
+          <h2 class="text-sm font-bold text-gray-900 flex items-center gap-2">
+            <svg class="w-4 h-4 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+            Danh Sách Mặt Hàng ({order.lines?.length || 0})
+          </h2>
+          <span class="text-xs text-gray-500">{order.order_status === 'CANCELLED' ? 'Đã hủy; chỉ giữ lịch sử hàng trên đơn' : order.order_type === 'PREORDER' ? 'Chưa xuất kho; chỉ giữ serial đã chọn' : 'Đã ghi chứng từ xuất kho'}</span>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-[14.5px] text-gray-700">
+            <thead class="bg-[#f8f9fa] text-[14px] font-semibold text-gray-700 border-b border-line select-none">
+              <tr>
+                <th class="p-3">#</th>
+                <th class="p-3">Sản phẩm &amp; Phiên bản</th>
+                <th class="p-3">Mã bộ / Định danh</th>
+                <th class="p-3 text-center">Tình trạng</th>
+                <th class="p-3 text-center">Số lượng</th>
+                <th class="p-3 text-right">Đơn giá</th>
+                <th class="p-3 text-right">Thành tiền</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-line">
+              {order.lines?.map((line: any, idx: number) => (
+                <tr class="hover:bg-blue-50/40 transition">
+                  <td class="p-3 text-gray-500 tabular-nums">{idx + 1}</td>
+                  <td class="p-3">
+                    <div class="font-normal text-gray-900">{line.product_name_snapshot}</div>
+                    <div class="text-[12px] text-gray-500 font-normal">Phiên bản: {line.type_name_snapshot}</div>
+                  </td>
+                  <td class="p-3">
+                    {line.units && line.units.length > 0 ? (
+                      <div class="space-y-1">
+                        {line.units.map((u: any) => (
+                          <div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-50 text-brand border border-blue-200 font-normal text-[12px]">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/></svg>
+                            <a href={`/admin/units?search=${encodeURIComponent(u.program_code)}`} target="_blank" class="hover:underline" title="Xem lý lịch 360°">
+                              {u.program_code}
+                            </a>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <span class="text-gray-400 italic text-[13px]">Theo số lượng</span>
+                    )}
+                  </td>
+                  <td class="p-3 text-center">
+                    <span class={`px-2 py-0.5 rounded text-[12px] font-medium ${line.condition === 'NEW' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+                      {line.condition === 'NEW' ? 'Mới 100%' : 'QSD'}
+                    </span>
+                  </td>
+                  <td class="p-3 text-center font-normal tabular-nums text-gray-900">{line.quantity}</td>
+                  <td class="p-3 text-right font-normal tabular-nums text-gray-700">{formatVND(line.unit_price_cents)}</td>
+                  <td class="p-3 text-right font-normal tabular-nums text-gray-900">{formatVND(line.line_total_cents)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- VẬN CHUYỂN & GIAO NHẬN -->
+      <div class="bg-white rounded-xl border border-line p-5 shadow-sm">
+        <h2 class="text-sm font-bold text-gray-900 pb-3 border-b border-line mb-3 flex items-center gap-2">
+          <svg class="w-4 h-4 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+          Thông Tin Vận Chuyển & Giao Hàng
+        </h2>
+
+        {order.shipment ? (
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+            <div class="p-3 rounded-lg bg-gray-50 border border-line">
+              <span class="text-gray-500 block mb-1">Phương thức</span>
+              <span class="font-bold text-gray-900 text-sm">
+                {order.shipment.carrier === 'PICKUP' && '🏢 Nhận tại Quầy / Xưởng'}
+                {order.shipment.carrier === 'BUS' && '🚌 Gửi Xe Khách / Chành Xe'}
+                {order.shipment.carrier === 'GHN' && '📦 Chuyển phát nhanh / GHN'}
+              </span>
+            </div>
+
+            {order.shipment.carrier === 'BUS' && (
+              <>
+                <div class="p-3 rounded-lg bg-gray-50 border border-line">
+                  <span class="text-gray-500 block mb-1">Nhà xe / Bến xe</span>
+                  <span class="font-semibold text-gray-900">{order.shipment.bus_station || 'Chưa ghi rõ'}</span>
+                </div>
+                <div class="p-3 rounded-lg bg-gray-50 border border-line">
+                  <span class="text-gray-500 block mb-1">Biển số xe / Số tài xế</span>
+                  <span class="font-semibold text-gray-900">{order.shipment.bus_plate || 'Chưa ghi rõ'}</span>
+                </div>
+              </>
+            )}
+
+            {order.shipment.carrier === 'GHN' && (
+              <div class="p-3 rounded-lg bg-gray-50 border border-line">
+                <span class="text-gray-500 block mb-1">Mã vận đơn</span>
+                <span class="font-mono font-bold text-brand">{order.shipment.tracking_code || 'Chưa có mã'}</span>
+              </div>
+            )}
+
+            <div class="p-3 rounded-lg bg-gray-50 border border-line md:col-span-3">
+              <span class="text-gray-500 block mb-1">Địa chỉ / Điểm giao hàng</span>
+              <span class="font-medium text-gray-900">{order.shipment.receiver_address || order.customer_address || 'Nhận tại quầy'}</span>
+            </div>
+          </div>
+        ) : (
+          <div class="text-xs text-gray-500 italic">Khách nhận tại quầy.</div>
+        )}
+      </div>
+
+    </div>
+
+    <!-- CỘT PHỤ (1/3): KHÁCH HÀNG & SỔ QUỸ CASHBOOK -->
+    <div class="space-y-6">
+      
+      <!-- KHÁCH HÀNG -->
+      <div class="bg-white rounded-xl border border-line p-5 shadow-sm">
+        <h2 class="text-sm font-bold text-gray-900 pb-3 border-b border-line mb-3 flex items-center gap-2">
+          <svg class="w-4 h-4 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+          Khách Hàng
+        </h2>
+        <div class="space-y-2 text-[14px]">
+          <div>
+            <span class="text-gray-500">Họ tên:</span>
+            <span class="text-gray-900 ml-1 font-normal text-[14.5px]">{order.customer_name || 'Khách vãng lai'}</span>
+          </div>
+          <div>
+            <span class="text-gray-500">Số điện thoại:</span>
+            <span class="font-normal text-gray-900 ml-1">{order.customer_phone || '-'}</span>
+          </div>
+          <div>
+            <span class="text-gray-500">Địa chỉ:</span>
+            <span class="text-gray-800 ml-1">{order.customer_address || '-'}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- TỔNG KẾT TIỀN & SỔ QUỸ -->
+      <div class="bg-white rounded-xl border border-line p-5 shadow-sm space-y-4">
+        <h2 class="text-[14.5px] font-semibold text-gray-900 pb-3 border-b border-line flex items-center gap-2">
+          <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          Dòng Tiền &amp; Sổ Quỹ (Cashbook)
+        </h2>
+
+        <div class="space-y-2.5 text-[14px]">
+          <div class="flex justify-between text-gray-600">
+            <span>Tổng tiền hàng:</span>
+            <span class="font-normal tabular-nums text-gray-900">{formatVND(order.amount_total_cents + order.discount_cents - order.shipping_cents)}</span>
+          </div>
+
+          {order.discount_cents > 0 && (
+            <div class="flex justify-between text-emerald-600">
+              <span>Chiết khấu:</span>
+              <span class="font-normal tabular-nums">-{formatVND(order.discount_cents)}</span>
+            </div>
+          )}
+
+          {order.shipping_cents > 0 && (
+            <div class="flex justify-between text-gray-600">
+              <span>Cước xe / ship:</span>
+              <span class="font-normal tabular-nums text-gray-900">+{formatVND(order.shipping_cents)}</span>
+            </div>
+          )}
+
+          <div class="flex justify-between text-[14.5px] font-medium text-gray-900 pt-2 border-t border-line">
+            <span>Tổng cộng đơn:</span>
+            <span class="font-normal tabular-nums text-gray-900">{formatVND(order.amount_total_cents)}</span>
+          </div>
+
+          <div class="flex justify-between text-[14px] text-emerald-700 font-normal">
+            <span>Tiền thanh toán đã ghi nhận:</span>
+            <span class="font-normal tabular-nums">{formatVND(order.paid_amount_cents)}</span>
+          </div>
+
+          <div class="flex justify-between text-[14px] text-red-600 font-normal pt-1 border-t border-dashed border-line">
+            <span>Còn lại phải thu (COD):</span>
+            <span class="font-normal tabular-nums">{formatVND(remainingDebt)}</span>
+          </div>
+        </div>
+
+        <!-- LỊCH SỬ PHIẾU THU SỔ QUỸ -->
+        <div class="pt-3 border-t border-line">
+          <span class="text-[13px] font-medium text-gray-700 block mb-2">Chứng từ Sổ Quỹ liên kết:</span>
+          {order.cash_transactions && order.cash_transactions.length > 0 ? (
+            <div class="space-y-2">
+              {order.cash_transactions.map((tx: any) => (
+                <div class="p-2.5 rounded-lg bg-emerald-50/60 border border-emerald-200 text-[13.5px] space-y-1">
+                  <div class="flex justify-between items-center">
+                    <a href={`/admin/cash?search=${tx.transaction_code}`} class="font-normal text-emerald-800 hover:underline">
+                      {tx.transaction_code}
+                    </a>
+                    <span class={`font-normal tabular-nums ${tx.flow_type === 'OUT' ? 'text-red-700' : 'text-emerald-700'}`}>{tx.flow_type === 'OUT' ? '−' : '+'}{formatVND(tx.amount_cents)}</span>
+                  </div>
+                  <div class="text-gray-500 flex justify-between text-[12px]">
+                    <span>Kênh: {tx.account_type === 'CASH' ? 'Tiền mặt' : `${tx.bank_name || 'Ngân hàng'}`}</span>
+                    <span class="tabular-nums">{formatDate(tx.created_at)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div class="text-xs text-gray-400 italic">Chưa có giao dịch thu tiền nào được ghi nhận.</div>
+          )}
+        </div>
+
+        {order.note && (
+          <div class="pt-3 border-t border-line text-xs">
+            <span class="text-gray-500 block mb-1 font-medium">Ghi chú:</span>
+            <div class="p-2.5 rounded bg-gray-50 border border-line text-gray-700 italic">{order.note}</div>
+          </div>
+        )}
+      </div>
+
+    </div>
+
+  </div>
+
+  <p class="mt-4 text-sm text-gray-600">Người lập đơn: {order.created_by || 'Chưa ghi nhận (dữ liệu cũ)'}</p>
+
+  <!-- MODAL THU THÊM TIỀN (POS) -->
+  <div id="payModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" style="display: none;">
+    <div class="w-full max-w-md bg-white rounded-2xl border border-line shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-150">
+      <div class="p-4 bg-emerald-600 text-white flex items-center justify-between">
+        <h3 class="font-bold text-base flex items-center gap-2">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+          Thu Thêm Tiền Đơn Hàng POS
+        </h3>
+        <button type="button" id="btnClosePayModal" class="text-white/80 hover:text-white transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <form method="POST" action="/api/admin/orders" class="p-5 space-y-4">
+        <input type="hidden" name="action" value="add_payment" />
+        <input type="hidden" name="request_id" value={crypto.randomUUID()} />
+        <input type="hidden" name="order_id" value={order.id} />
+
+        <div>
+          <label class="block text-xs font-semibold text-gray-700 mb-1">Số tiền thu thêm (VNĐ) <span class="text-red-500">*</span></label>
+          <input
+            type="number"
+            name="amount_paid"
+            required
+            min="1"
+            max={remainingDebt}
+            step="1"
+            value={remainingDebt}
+            class="w-full rounded-lg border border-line bg-white px-3 py-2 text-base font-normal tabular-nums text-emerald-700 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+          />
+          <p class="text-[12px] text-gray-500 mt-1">Còn nợ: <span class="tabular-nums font-normal text-gray-900">{formatVND(remainingDebt)}</span></p>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1">Kênh thu tiền Sổ Quỹ</label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="flex items-center gap-2 p-2 rounded border border-line bg-white cursor-pointer hover:bg-gray-50 text-xs">
+              <input type="radio" name="payment_method" value="CASH" checked class="text-brand focus:ring-brand pay-method-radio" />
+              <span class="font-medium text-gray-900">Tiền mặt (Két)</span>
+            </label>
+            <label class="flex items-center gap-2 p-2 rounded border border-line bg-white cursor-pointer hover:bg-gray-50 text-xs">
+              <input type="radio" name="payment_method" value="BANK" class="text-brand focus:ring-brand pay-method-radio" />
+              <span class="font-medium text-gray-900">Ngân hàng (CK)</span>
+            </label>
+            {order.customer_id && can('sales.credit') && <label class="flex items-center gap-2 text-sm"><input type="radio" name="payment_method" value="CREDIT" class="pay-method-radio" /><span>Số dư khách ({formatVND(order.customer_credit_cents || 0)})</span></label>}
+          </div>
+        </div>
+
+        <div id="modalBankSelectBox" style="display: none;">
+          <label class="block text-xs font-medium text-gray-700 mb-1">Tài khoản nhận tiền</label>
+          <select name="bank_name" class="w-full rounded-md border border-line bg-white px-3 py-1.5 text-xs text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand">
+            <option value="Vietcombank - 0123456789">Vietcombank - 0123456789 (Trung Kiên Game)</option>
+            <option value="MB Bank - 99998888">MB Bank - 99998888 (Trung Kiên Game)</option>
+            <option value="Techcombank - 190333222">Techcombank - 190333222</option>
+            <option value="Khác">Tài khoản ngân hàng khác</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1">Ghi chú thu tiền</label>
+          <input type="text" name="note" placeholder="VD: Khách trả nốt khi nhận máy tại bến xe" class="w-full rounded-md border border-line bg-white px-3 py-2 text-xs text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand" />
+        </div>
+
+        <div class="pt-2 flex justify-end gap-2">
+          <button type="button" id="btnCancelPayModal" class="px-4 py-2 rounded-lg border border-line text-xs font-medium text-gray-700 hover:bg-gray-50 transition">
+            Hủy
+          </button>
+          <button type="submit" class="px-4 py-2 rounded-lg bg-emerald-600 text-xs font-bold text-white hover:bg-emerald-700 transition flex items-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            Xác Nhận & Lập Phiếu Thu
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL XỬ LÝ XUẤT KHO & HOÀN TẤT ĐƠN ĐẶT HÀNG -->
+  <div id="fulfillModal" style="display: none;" class="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl border border-line w-full max-w-md p-6 animate-in fade-in zoom-in duration-150">
+      <div class="flex items-center justify-between mb-4 border-b border-line pb-3">
+        <h3 class="text-base font-bold text-gray-900 flex items-center gap-2">
+          <span class="text-xl">⚡</span>
+          Xuất Kho &amp; Hoàn Tất Đặt Hàng
+        </h3>
+        <button type="button" id="btnCloseFulfillModal" class="text-gray-400 hover:text-gray-600 text-lg cursor-pointer font-bold">✕</button>
+      </div>
+
+      <form method="POST" action="/api/admin/orders" class="space-y-4">
+        <input type="hidden" name="action" value="fulfill_preorder" />
+        <input type="hidden" name="request_id" value={crypto.randomUUID()} />
+        <input type="hidden" name="order_id" value={order.id} />
+
+        <div class="bg-amber-50 p-3 rounded-xl border border-amber-200 text-xs text-amber-900 space-y-1.5">
+          <div class="flex justify-between">
+            <span>Tổng giá trị đơn:</span>
+            <strong class="font-bold text-gray-900">{formatVND(order.amount_total_cents)}</strong>
+          </div>
+          <div class="flex justify-between">
+            <span>Tiền cọc đã nhận:</span>
+            <strong class="font-bold text-emerald-700">{formatVND(order.paid_amount_cents)}</strong>
+          </div>
+          <div class="flex justify-between text-sm pt-1.5 border-t border-amber-200">
+            <span class="font-bold text-gray-800">Số tiền còn lại cần thu:</span>
+            <strong class="font-extrabold text-red-600">{formatVND(remainingDebt)}</strong>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1">Số tiền khách thanh toán hôm nay (VNĐ)</label>
+          <input
+            type="text"
+            name="amount_paid"
+            value={formatNumber(remainingDebt)}
+            class="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm font-bold text-emerald-700 focus:border-brand focus:ring-1 focus:ring-brand"
+          />
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1">Phương thức thanh toán</label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="flex items-center gap-2 p-2 rounded-lg border border-line bg-white cursor-pointer hover:bg-gray-50 text-xs">
+              <input type="radio" name="payment_method" value="CASH" checked class="text-brand focus:ring-brand" />
+              <span class="font-medium text-gray-900">💵 Tiền mặt</span>
+            </label>
+            <label class="flex items-center gap-2 p-2 rounded-lg border border-line bg-white cursor-pointer hover:bg-gray-50 text-xs">
+              <input type="radio" name="payment_method" value="BANK" class="text-brand focus:ring-brand" />
+              <span class="font-medium text-gray-900">💳 Chuyển khoản</span>
+            </label>
+            {order.customer_id && can('sales.credit') && <label class="flex items-center gap-2 text-sm"><input type="radio" name="payment_method" value="CREDIT" /><span>Số dư khách ({formatVND(order.customer_credit_cents || 0)})</span></label>}
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1">Ghi chú xuất kho</label>
+          <input type="text" name="note" placeholder="VD: Khách lấy máy trực tiếp tại quầy" class="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-gray-900 focus:border-brand focus:ring-1 focus:ring-brand" />
+        </div>
+
+        <div class="pt-2 flex justify-end gap-2">
+          <button type="button" id="btnCancelFulfillModal" class="px-4 py-2 rounded-lg border border-line text-xs font-medium text-gray-700 hover:bg-gray-50 transition cursor-pointer">
+            Hủy
+          </button>
+          <button type="submit" class="px-4 py-2 rounded-lg bg-emerald-600 text-xs font-bold text-white hover:bg-emerald-700 transition flex items-center gap-1.5 shadow cursor-pointer">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+            Xác Nhận Xuất Kho &amp; Hoàn Tất
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+{canCancel && <div id="cancelOrderModal" style="display: none;" class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+  <form method="POST" action="/api/admin/orders" class="w-full max-w-md rounded-xl bg-white p-5 space-y-4">
+    <h3 class="font-bold text-gray-900">Hủy đơn {order.order_code}</h3>
+    <input type="hidden" name="action" value="update_status" />
+    <input type="hidden" name="order_id" value={order.id} />
+    <input type="hidden" name="order_status" value="CANCELLED" />
+    {order.paid_amount_cents > 0 && <p class="text-sm text-gray-700">Giữ nguyên phiếu thu. Tiền thực thu sẽ chuyển sang chờ hoàn cho {order.customer_name || 'khách được chọn bên dưới'}. Phần đã trả bằng số dư hoàn về số dư. Xác nhận đã trả tiền ở đơn này mới tạo phiếu chi.</p>}
+    {order.paid_amount_cents > 0 && !order.customer_id && <label class="block text-sm">Khách nhận hoàn
+      <select name="credit_customer_id" required class="mt-1 w-full border border-line rounded p-2"><option value="">Chọn đúng khách hàng</option>{creditCustomers.map(customer => <option value={customer.id}>{customer.name}{customer.phone ? ` — ${customer.phone}` : ''}</option>)}</select>
+    </label>}
+    <p class="text-sm text-amber-800">Chỉ hủy hàng chưa giao. Hàng đã giao hoặc đang giao cần lập phiếu trả hàng riêng.</p>
+    <div class="flex justify-end gap-2"><button type="button" id="btnCloseCancelModal" class="border border-line rounded px-3 py-2 text-sm">Quay lại</button><button class="bg-red-600 text-white rounded px-3 py-2 text-sm">Xác nhận hủy đơn</button></div>
+  </form>
+</div>}
+
+{order.credit_issued_cents > 0 && <p class="my-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">Đã chuyển {formatVND(order.credit_issued_cents)} VNĐ của đơn hủy thành số dư khách. Số dư hiện tại: {formatVND(order.customer_credit_cents || 0)} VNĐ.</p>}
+
+{order.refund_obligation && <section id="refunds" class="my-4 rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
+  <h3 class="font-bold">Hoàn tiền cho khách</h3>
+  <p>Phải hoàn: {formatVND(order.refund_obligation.amount_cents)} · Đã hoàn: {formatVND(order.refund_obligation.settled_cents)} · Chờ hoàn: {formatVND(order.refund_obligation.amount_cents-order.refund_obligation.settled_cents)}</p>
+  {can('sales.refund') && order.refund_obligation.amount_cents > order.refund_obligation.settled_cents && <form method="POST" action="/api/admin/order-refunds" class="flex flex-wrap items-end gap-3">
+    <input type="hidden" name="obligation_id" value={order.refund_obligation.id} />
+    <input type="hidden" name="request_id" value={crypto.randomUUID()} />
+    <label>Số tiền thực trả<input name="amount_cents" type="number" min="1" step="1" max={order.refund_obligation.amount_cents-order.refund_obligation.settled_cents} required class="block border rounded p-2" /></label>
+    <label>Quỹ<select name="account_type" class="block border rounded p-2"><option value="CASH">Tiền mặt</option><option value="BANK">Ngân hàng</option></select></label>
+    <label>Mã giao dịch<input name="reference_code" class="block border rounded p-2" /></label>
+    <label class="flex gap-2"><input type="checkbox" name="confirmed" required />Tôi đã trả tiền cho khách</label>
+    <button class="bg-blue-700 text-white rounded p-2">Ghi nhận hoàn tiền</button>
+  </form>}
+</section>}
+
+{order.customer_returns?.length > 0 && <section class="my-4 border rounded p-4"><h3 class="font-bold">Lịch sử khách trả hàng</h3><p>Theo dõi lượng chờ kiểm tra, đã nhập lại và hàng lỗi bên dưới. Phiếu trả đã giảm nghĩa vụ thanh toán; giữ hóa đơn gốc.</p>{order.customer_returns.map((r:any)=><p>{r.return_code}: {formatVND(r.amount_cents)} — {r.reason}</p>)}</section>}
+{can('sales.return') && order.order_status === 'COMPLETED' && <section class="my-4 border rounded p-4 space-y-3">
+ <h3 class="font-bold">Nhận hàng khách trả</h3><p>Giảm nợ trước, phần đã thanh toán dư mới hoàn. Không tự hoàn phí vận chuyển. Hàng/serial nhận lại chờ kiểm tra; chưa được bán lại.</p>
+ <form method="POST" action="/api/admin/customer-returns" class="space-y-3">
+ <input type="hidden" name="order_id" value={order.id} /><input type="hidden" name="request_id" value={crypto.randomUUID()} />
+ {!order.customer_id && <label>Khách nhận hoàn<select name="customer_id" required><option value="">Chọn khách</option>{creditCustomers.map(c=><option value={c.id}>{c.name}</option>)}</select></label>}
+ {order.lines?.map((l:any)=><label class="flex gap-3 items-center">{l.product_name_snapshot} — đã bán {l.quantity}, đã trả {l.returned_quantity || 0}<input aria-label={`Số lượng trả dòng ${l.id}`} type="number" name={`quantity:${l.id}`} min="0" max={l.quantity-(l.returned_quantity || 0)} step="1" value="0" class="w-24 border rounded p-2" /></label>)}
+ <label class="block">Lý do<input name="reason" required class="block border rounded p-2 w-full" /></label>
+ <label class="flex gap-2"><input name="confirmed" type="checkbox" required />Đã nhận lại hàng; phần mềm/key đã xác minh thu hồi quyền sử dụng. Chuyển hàng sang chờ kiểm tra.</label>
+ <button class="bg-blue-700 text-white p-2 rounded">Lập phiếu trả hàng</button></form></section>}
+
+{order.return_inspection_items?.length > 0 && <section id="return-inspections" class="my-4 rounded-lg border border-blue-200 bg-white p-4 space-y-4">
+ <h3 class="font-bold">Kiểm tra hàng khách trả</h3>
+ <p class="text-sm text-gray-600">Có thể xử lý từng phần. Chỉ hàng đủ điều kiện mới nhập lại kho bán. Hàng lỗi giữ riêng, không tự tăng tồn bán hoặc đảo khoản tiền đã hoàn.</p>
+ {order.return_inspection_items.map((ri:any)=>{
+  const remaining=ri.quantity-ri.restocked_quantity-ri.rejected_quantity;
+  const defective=ri.rejected_quantity-ri.disposed_quantity;
+  return <div class="border-t pt-3 space-y-2">
+   <p class="font-semibold">{ri.return_code} · {ri.product_name_snapshot}</p>
+   <p class="text-sm">Nhận trả: {ri.quantity} · Chờ kiểm tra: {remaining} · Đã nhập lại: {ri.restocked_quantity} · Hàng lỗi còn giữ: {defective} · Đã tiêu hủy: {ri.disposed_quantity}</p>
+   {can('inventory.adjust') && remaining > 0 && <form method="POST" action="/api/admin/return-inspections" class="flex flex-wrap items-end gap-3">
+    <input type="hidden" name="return_item_id" value={ri.id} /><input type="hidden" name="request_id" value={crypto.randomUUID()} />
+    <label>Số lượng<input aria-label={`Số lượng kiểm tra ${ri.id}`} type="number" name="quantity" min="1" max={remaining} step="1" value={remaining} required class="block w-24 border rounded p-2" /></label>
+    <label>Kết quả<select name="decision" aria-label={`Kết quả kiểm tra ${ri.id}`} class="block border rounded p-2"><option value="RESTOCK">Đủ điều kiện nhập lại</option><option value="REJECT">Hàng lỗi, giữ riêng</option></select></label>
+    <label>Tình trạng nhập lại<select name="condition" class="block border rounded p-2"><option value="NEW" selected={ri.condition==='NEW'} disabled={ri.condition==='QSD'}>Mới</option><option value="QSD" selected={ri.condition==='QSD'}>Qua sử dụng</option></select></label>
+    <label class="w-full">Kết quả kiểm tra / lý do<input aria-label={`Ghi chú kiểm tra ${ri.id}`} name="note" required class="block w-full border rounded p-2" /></label>
+    <label class="flex gap-2 w-full"><input name="confirmed" type="checkbox" required />Tôi đã kiểm tra số hàng này</label>
+    <label class="flex gap-2 w-full"><input name="resale_confirmed" type="checkbox" />Hàng đủ điều kiện bán lại; với phần mềm/key đã thu hồi quyền cũ và xác minh có thể bán lại (bắt buộc khi nhập lại kho)</label>
+    <button class="bg-blue-700 text-white rounded p-2">Ghi kết quả kiểm tra</button>
+   </form>}
+   {can('inventory.adjust') && defective > 0 && <details class="rounded border border-red-200 p-3"><summary class="cursor-pointer font-semibold text-red-800">Ghi nhận tiêu hủy hàng lỗi</summary>
+    <p class="my-2 text-sm">Chỉ ghi sau khi đã tiêu hủy thực tế hoặc vô hiệu hóa phần mềm/key. Hàng còn sửa được tiếp tục giữ riêng. Phiếu này không trừ tồn bán lần nữa, không thay đổi tiền hoàn và không thể sửa trực tiếp sau khi ghi.</p>
+    <form method="POST" action="/api/admin/return-disposals" class="flex flex-wrap gap-3 items-end">
+     <input type="hidden" name="return_item_id" value={ri.id} /><input type="hidden" name="request_id" value={crypto.randomUUID()} />
+     <label>Số lượng tiêu hủy<input aria-label={`Số lượng tiêu hủy ${ri.id}`} name="quantity" type="number" min="1" max={defective} step="1" value={defective} required class="block w-24 border rounded p-2" /></label>
+     <label class="w-full">Lý do / cách xử lý<input aria-label={`Lý do tiêu hủy ${ri.id}`} name="reason" required class="block w-full border rounded p-2" /></label>
+     <label class="flex gap-2 w-full"><input type="checkbox" name="confirmed" required />Đã tiêu hủy hoặc vô hiệu hóa đúng số hàng lỗi này; không còn giữ để sửa hay bán lại.</label>
+     <button class="rounded bg-red-700 text-white p-2">Ghi phiếu tiêu hủy hàng lỗi</button>
+    </form>
+   </details>}
+  </div>;
+ })}
+ {order.return_inspections?.length > 0 && <div class="border-t pt-3"><h4 class="font-semibold">Lịch sử kiểm tra</h4>{order.return_inspections.map((i:any)=><p class="text-sm">#{i.id} · {i.quantity} · {i.decision==='RESTOCK'?'Nhập lại kho bán':'Giữ riêng hàng lỗi'} · {i.note} · {i.inspected_by}</p>)}</div>}
+ {order.return_disposals?.length > 0 && <div class="border-t pt-3"><h4 class="font-semibold">Lịch sử tiêu hủy hàng lỗi</h4>{order.return_disposals.map((d:any)=><p class="text-sm break-words">{d.disposal_code} · Dòng trả #{d.return_item_id} · {d.quantity} hàng · {d.product_unit_id ? `Serial #${d.product_unit_id} · ` : ''}{d.reason} · {d.created_by} · {d.created_at} UTC</p>)}</div>}
+</section>}
+
+</AdminLayout>
+
+<script>
+  const cancelModal = document.getElementById('cancelOrderModal');
+  document.getElementById('btnOpenCancelModal')?.addEventListener('click', () => { if (cancelModal) cancelModal.style.display = 'flex'; });
+  document.getElementById('btnCloseCancelModal')?.addEventListener('click', () => { if (cancelModal) cancelModal.style.display = 'none'; });
+  function setupOrderDetails() {
+    const btnOpen = document.getElementById('btnOpenPayModal');
+    const btnClose = document.getElementById('btnClosePayModal');
+    const btnCancel = document.getElementById('btnCancelPayModal');
+    const modal = document.getElementById('payModal');
+
+    const modalBankBox = document.getElementById('modalBankSelectBox');
+    const payRadios = document.querySelectorAll('.pay-method-radio') as NodeListOf<HTMLInputElement>;
+
+    btnOpen?.addEventListener('click', () => {
+      if (modal) modal.style.display = 'flex';
+    });
+
+    const hideModal = () => {
+      if (modal) modal.style.display = 'none';
+    };
+
+    btnClose?.addEventListener('click', hideModal);
+    btnCancel?.addEventListener('click', hideModal);
+
+    payRadios.forEach((r) => {
+      r.addEventListener('change', () => {
+        const val = (document.querySelector('.pay-method-radio:checked') as HTMLInputElement)?.value;
+        if (modalBankBox) modalBankBox.style.display = val === 'BANK' ? 'block' : 'none';
+      });
+    });
+
+    // Fulfill Modal setup
+    const btnOpenFulfill = document.getElementById('btnOpenFulfillModal');
+    const btnCloseFulfill = document.getElementById('btnCloseFulfillModal');
+    const btnCancelFulfill = document.getElementById('btnCancelFulfillModal');
+    const fulfillModal = document.getElementById('fulfillModal');
+
+    btnOpenFulfill?.addEventListener('click', () => {
+      if (fulfillModal) fulfillModal.style.display = 'flex';
+    });
+
+    const hideFulfillModal = () => {
+      if (fulfillModal) fulfillModal.style.display = 'none';
+    };
+
+    btnCloseFulfill?.addEventListener('click', hideFulfillModal);
+    btnCancelFulfill?.addEventListener('click', hideFulfillModal);
+  }
+
+  setupOrderDetails();
+  document.addEventListener('astro:page-load', setupOrderDetails);
+</script>

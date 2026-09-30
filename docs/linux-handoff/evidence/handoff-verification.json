@@ -1,0 +1,31 @@
+{
+  "status": "PASS",
+  "command": "npm run verify",
+  "exit_code": 0,
+  "unit_tests": 952,
+  "astro": {
+    "files": 498,
+    "errors": 0,
+    "warnings": 0
+  },
+  "platform": "macOS arm64",
+  "node": "22.23.2",
+  "linux_executed": false,
+  "dependency_install_on_linux_verified": false,
+  "local_model_tested": false,
+  "intermittent_http_failure_observed": true,
+  "intermittent_http_root_cause_resolved": false,
+  "business_source_changes": false,
+  "D17_implemented": false,
+  "D16_source_hashes_matched": 12,
+  "export_source_files": 664,
+  "excluded_source_candidates": 57,
+  "git_history_included": false,
+  "published": false,
+  "deployed": false,
+  "notes": [
+    "Initial packaging omitted verify.yml required by a unit test; restored and full verify rerun.",
+    "Initial restricted run could not listen on loopback; approved local verification rerun.",
+    "Temporary symlink dependency layout caused MCP types to fail; replaced with isolated real directories and reran full verify. No node_modules in final package."
+  ]
+}

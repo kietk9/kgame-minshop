@@ -1,0 +1,639 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../../layouts/AdminLayout.astro';
+import { listPurchaseReceipts, getPurchaseKpi, getPurchaseReceiptById } from '../../../features/kgame/db';
+
+export const prerender = false;
+
+const search = Astro.url.searchParams.get('q') || '';
+const status = Astro.url.searchParams.get('status') || 'ALL';
+
+const receipts = await listPurchaseReceipts(env.DB, {
+  search: search || undefined,
+  status: status || undefined,
+});
+
+const kpi = await getPurchaseKpi(env.DB);
+
+// Load chi tiết các mặt hàng và giao dịch sổ quỹ cho từng phiếu nhập để hiển thị Accordion
+const receiptDetailsMap: Record<number, any> = {};
+for (const r of receipts) {
+  const d = await getPurchaseReceiptById(env.DB, r.id);
+  if (d) {
+    receiptDetailsMap[r.id] = d;
+  }
+}
+
+const formatNumber = (val: number) => {
+  if (!val || isNaN(val)) return '0';
+  return new Intl.NumberFormat('en-US').format(val);
+};
+const formatVND = formatNumber;
+
+const formatDate = (iso: string) => {
+  if (!iso) return '-';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
+  } catch {
+    return iso;
+  }
+};
+
+const success = Astro.url.searchParams.get('success');
+const error = Astro.url.searchParams.get('error');
+---
+
+<AdminLayout title="Nhập hàng & Mua hàng" active="purchases">
+  <!-- HEADER & NÚT NHẬP HÀNG -->
+  <div class="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold text-gray-900">Quản Lý Nhập Hàng</h1>
+      <p class="mt-1 text-sm text-gray-500">
+        Quản lý phiếu nhập hàng từ nhà cung cấp, phân bổ giá vốn, theo dõi công nợ &amp; Sổ Quỹ.
+      </p>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <a
+        href="/admin/purchases/new"
+        class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-white font-semibold text-sm shadow hover:bg-blue-700 transition"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        + Tạo Phiếu Nhập Hàng
+      </a>
+    </div>
+  </div>
+
+  {success && (
+    <div class="mb-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 flex items-center gap-2">
+      <svg class="w-5 h-5 flex-shrink-0 text-emerald-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+      <span>Lưu phiếu nhập hàng thành công! Đã tự động cập nhật tồn kho và Sổ Quỹ.</span>
+    </div>
+  )}
+
+  {error && (
+    <div class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex items-center gap-2">
+      <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
+      <span>{error}</span>
+    </div>
+  )}
+
+  <!-- THẺ KPI TỔNG QUAN -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <div class="bg-white rounded-xl border border-line p-4 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-medium text-gray-500">Tổng phiếu nhập hàng</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-2xl font-semibold text-gray-900 tabular-nums">{kpi.total_receipts}</span>
+        <span class="text-xs text-gray-500">phiếu hiệu lực</span>
+      </div>
+      <div class="mt-1 text-[11px] text-gray-400">
+        Tạm: {kpi.draft_receipts} | Đã hủy: <span class="text-rose-600 font-semibold">{kpi.cancelled_receipts}</span>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl border border-line p-4 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-medium text-gray-500">Tổng giá trị nhập hoàn thành</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-2xl font-semibold text-emerald-700 tabular-nums">{formatVND(kpi.total_spent_cents)}</span>
+      </div>
+      <div class="mt-1 text-[11px] text-gray-400">Không tính phiếu hủy</div>
+    </div>
+
+    <div class="bg-white rounded-xl border border-line p-4 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-medium text-gray-500">Còn nợ nhà cung cấp</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-2xl font-semibold text-amber-700 tabular-nums">{formatVND(kpi.total_debt_cents)}</span>
+      </div>
+      <div class="mt-1 text-[11px] text-gray-400">Công nợ thực tế phải trả</div>
+    </div>
+
+    <div class="bg-white rounded-xl border border-line p-4 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-medium text-gray-500">Tổng lượng hàng đã nhập kho</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+        </span>
+      </div>
+      <div class="mt-2 flex items-baseline gap-2">
+        <span class="text-2xl font-semibold text-blue-700 tabular-nums">{kpi.total_items_count}</span>
+        <span class="text-xs text-blue-600 font-medium">mặt hàng</span>
+      </div>
+      <div class="mt-1 text-[11px] text-gray-400">Tồn kho thực tế đã ghi thẻ</div>
+    </div>
+  </div>
+
+  <!-- BỘ LỌC & TÌM KIẾM CHUẨN KIOTVIET -->
+  <div class="bg-white rounded-xl border border-line p-4 mb-6 shadow-sm space-y-3">
+    <!-- THANH PILLS CHỌN TRẠNG THÁI NHANH -->
+    <div class="flex flex-wrap items-center gap-2 border-b border-gray-100 pb-3 text-xs">
+      <span class="text-gray-500 font-semibold mr-1">Trạng thái:</span>
+      <a
+        href={`/admin/purchases?status=ALL${search ? '&q=' + encodeURIComponent(search) : ''}`}
+        class={`px-3 py-1.5 rounded-lg font-semibold transition ${status === 'ALL' ? 'bg-blue-600 text-white shadow-xs' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+      >
+        Tất cả ({kpi.total_receipts + kpi.cancelled_receipts})
+      </a>
+      <a
+        href={`/admin/purchases?status=COMPLETED${search ? '&q=' + encodeURIComponent(search) : ''}`}
+        class={`px-3 py-1.5 rounded-lg font-semibold transition ${status === 'COMPLETED' ? 'bg-emerald-600 text-white shadow-xs' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+      >
+        ✓ Đã hoàn thành ({kpi.completed_receipts})
+      </a>
+      <a
+        href={`/admin/purchases?status=DRAFT${search ? '&q=' + encodeURIComponent(search) : ''}`}
+        class={`px-3 py-1.5 rounded-lg font-semibold transition ${status === 'DRAFT' ? 'bg-amber-600 text-white shadow-xs' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+      >
+        📋 Phiếu tạm ({kpi.draft_receipts})
+      </a>
+      <a
+        href={`/admin/purchases?status=CANCELLED${search ? '&q=' + encodeURIComponent(search) : ''}`}
+        class={`px-3 py-1.5 rounded-lg font-semibold transition ${status === 'CANCELLED' ? 'bg-rose-600 text-white shadow-xs' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+      >
+        🗑️ Đã hủy ({kpi.cancelled_receipts})
+      </a>
+    </div>
+
+    <!-- FORM TÌM KIẾM & DROPDOWN -->
+    <form method="get" class="flex flex-col md:flex-row gap-3 text-[13.5px]">
+      <div class="relative flex-1">
+        <input
+          type="text"
+          name="q"
+          value={search}
+          placeholder="Tìm theo mã phiếu PNxxxx, tên nhà cung cấp, số điện thoại, ghi chú..."
+          class="w-full pl-10 pr-4 py-2 text-[13.5px] border border-line rounded-lg focus:outline-none focus:border-brand"
+        />
+        <svg class="w-4 h-4 text-gray-400 absolute left-3 top-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+      </div>
+
+      <div class="w-full md:w-48">
+        <select
+          name="status"
+          class="w-full py-2 px-3 text-[13.5px] border border-line rounded-lg focus:outline-none focus:border-brand bg-white font-medium"
+        >
+          <option value="ALL" selected={status === 'ALL'}>Tất cả trạng thái</option>
+          <option value="COMPLETED" selected={status === 'COMPLETED'}>Đã hoàn thành</option>
+          <option value="DRAFT" selected={status === 'DRAFT'}>Phiếu tạm</option>
+          <option value="CANCELLED" selected={status === 'CANCELLED'}>Đã hủy</option>
+        </select>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button
+          type="submit"
+          class="px-4 py-2 bg-gray-900 text-white rounded-lg text-[13.5px] font-medium hover:bg-black transition"
+        >
+          Lọc
+        </button>
+        {(search || status !== 'ALL') && (
+          <a
+            href="/admin/purchases"
+            class="px-3 py-2 border border-line rounded-lg text-[13.5px] text-gray-600 hover:bg-gray-50 transition"
+          >
+            Đặt lại
+          </a>
+        )}
+      </div>
+    </form>
+  </div>
+
+  <!-- BẢNG DANH SÁCH PHIẾU NHẬP HÀNG CHUẨN KIOTVIET (ACCORDION) -->
+  <div class="bg-white rounded-xl border border-line shadow-sm overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-[13.5px] text-gray-700">
+        <thead class="bg-[#f8f9fa] text-[13px] font-semibold text-gray-700 border-b border-line select-none">
+          <tr>
+            <th class="w-10 px-3 py-3 text-center">
+              <input type="checkbox" class="rounded border-gray-300 text-brand" />
+            </th>
+            <th class="px-3 py-3 w-28">Mã nhập hàng</th>
+            <th class="px-3 py-3 w-32">Mã đặt hàng nhập</th>
+            <th class="px-3 py-3">Thời gian</th>
+            <th class="px-3 py-3">Mã NCC</th>
+            <th class="px-3 py-3">Nhà cung cấp</th>
+            <th class="px-3 py-3 text-right">Cần trả NCC</th>
+            <th class="px-3 py-3 text-center">Trạng thái</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-line">
+          {receipts.length === 0 ? (
+            <tr>
+              <td colspan="8" class="text-center py-12 text-gray-400">
+                <svg class="w-12 h-12 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/></svg>
+                <p class="font-medium text-gray-600">Chưa có phiếu nhập hàng nào</p>
+                <a
+                  href="/admin/purchases/new"
+                  class="inline-flex items-center gap-1.5 mt-3 px-4 py-2 bg-brand text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition"
+                >
+                  + Tạo Phiếu Nhập Hàng Mới
+                </a>
+              </td>
+            </tr>
+          ) : (
+            receipts.map((r) => {
+              const details = receiptDetailsMap[r.id] || { items: [], cash_transactions: [] };
+              const isCancelled = r.receipt_status === 'CANCELLED';
+              const isDraft = r.receipt_status === 'DRAFT';
+              const isCompleted = r.receipt_status === 'COMPLETED';
+
+              return (
+                <>
+                  <!-- ROW CHÍNH -->
+                  <tr
+                    class={`purchase-row hover:bg-blue-50/50 cursor-pointer transition select-none ${isCancelled ? 'opacity-60 bg-gray-50' : ''}`}
+                    data-id={r.id}
+                  >
+                    <td class="px-3 py-3 text-center" onclick="event.stopPropagation()">
+                      <input type="checkbox" class="rounded border-gray-300 text-brand" />
+                    </td>
+                    <td class="px-3 py-3 font-semibold text-blue-600 hover:underline">
+                      {r.receipt_code}
+                      {r.pending_refund_cents > 0 && <a href={`/admin/purchases/${r.id}`} onclick="event.stopPropagation()" class="block text-xs text-amber-700">Chờ nhận hoàn: {formatVND(r.pending_refund_cents)}đ</a>}
+                    </td>
+                    <td class="px-3 py-3 text-xs text-gray-500 font-mono">
+                      {r.order_receipt_code || '--'}
+                    </td>
+                    <td class="px-3 py-3 text-xs text-gray-500 whitespace-nowrap">
+                      {formatDate(r.created_at)}
+                    </td>
+                    <td class="px-3 py-3 text-xs font-mono text-gray-600">
+                      {r.supplier_code || '--'}
+                    </td>
+                    <td class="px-3 py-3">
+                      <div class="font-medium text-gray-900">{r.supplier_name || 'Nhà cung cấp lẻ'}</div>
+                      {r.supplier_phone && <div class="text-[11px] text-gray-400">{r.supplier_phone}</div>}
+                    </td>
+                    <td class="px-3 py-3 text-right font-semibold tabular-nums text-gray-900 whitespace-nowrap">
+                      {formatVND(r.total_amount_cents)}
+                    </td>
+                    <td class="px-3 py-3 text-center whitespace-nowrap">
+                      <span
+                        class={`inline-block px-2 py-0.5 rounded text-[11px] font-bold ${
+                          isCompleted
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : isDraft
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-rose-100 text-rose-800'
+                        }`}
+                      >
+                        {isCompleted ? 'Đã nhập hàng' : isDraft ? 'Phiếu tạm' : 'Đã hủy'}
+                      </span>
+                    </td>
+                  </tr>
+
+                  <!-- ACCORDION DRAWER CHI TIẾT (CHUẨN ẢNH KIOTVIET) -->
+                  <tr id={`drawer-${r.id}`} class="purchase-drawer hidden bg-white border-y-2 border-blue-500">
+                    <td colspan="8" class="p-0">
+                      <div class="p-5 bg-white space-y-4">
+                        <!-- TABS BAR: THÔNG TIN vs LỊCH SỬ THANH TOÁN -->
+                        <div class="flex items-center gap-6 border-b border-gray-200 text-sm font-semibold">
+                          <button
+                            type="button"
+                            class="tab-btn py-2 border-b-2 border-brand text-brand -mb-px flex items-center gap-1.5 cursor-pointer"
+                            data-target={`tab-info-${r.id}`}
+                          >
+                            <span>Thông tin</span>
+                          </button>
+                          <button
+                            type="button"
+                            class="tab-btn py-2 border-b-2 border-transparent text-gray-500 hover:text-gray-900 -mb-px flex items-center gap-1.5 cursor-pointer"
+                            data-target={`tab-cash-${r.id}`}
+                          >
+                            <span>Lịch sử thanh toán</span>
+                            {details.cash_transactions.length > 0 && (
+                              <span class="px-1.5 py-0.2 bg-blue-100 text-blue-700 text-[10.5px] rounded-full">
+                                {details.cash_transactions.length}
+                              </span>
+                            )}
+                          </button>
+                        </div>
+
+                        <!-- TAB 1: THÔNG TIN CHI TIẾT HÀNG HÓA -->
+                        <div id={`tab-info-${r.id}`} class="tab-content space-y-4">
+                          <div class="flex flex-wrap items-center justify-between gap-4 text-xs">
+                            <div class="flex items-center gap-3">
+                              <span class="text-base font-bold text-gray-900">{r.receipt_code}</span>
+                              <span
+                                class={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                                  isCompleted ? 'bg-emerald-100 text-emerald-800' : isDraft ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'
+                                }`}
+                              >
+                                {isCompleted ? 'Đã nhập hàng' : isDraft ? 'Phiếu tạm' : 'Đã hủy'}
+                              </span>
+                            </div>
+                            <div class="text-gray-500">Kho số 5 (KGAME)</div>
+                          </div>
+
+                          <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs bg-gray-50 p-3 rounded-lg border border-line">
+                            <div><span class="text-gray-500">Người tạo:</span> <strong class="text-gray-800">Kiệt</strong></div>
+                            <div><span class="text-gray-500">Người nhập:</span> <strong class="text-gray-800">Kiệt</strong></div>
+                            <div><span class="text-gray-500">Ngày nhập:</span> <strong class="text-gray-800">{formatDate(r.created_at)}</strong></div>
+                            <div><span class="text-gray-500">Tên NCC:</span> <strong class="text-blue-700">{r.supplier_name || 'Nhà cung cấp lẻ'}</strong></div>
+                            {r.supplier_phone && <div><span class="text-gray-500">SĐT:</span> <strong class="text-gray-800">{r.supplier_phone}</strong></div>}
+                            {r.invoice_number && <div><span class="text-gray-500">Số hóa đơn đầu vào:</span> <strong class="text-gray-800">{r.invoice_number}</strong></div>}
+                          </div>
+
+                          <!-- BẢNG CÁC MẶT HÀNG TRONG PHIẾU NHẬP -->
+                          <div class="border border-line rounded-lg overflow-hidden">
+                            <table class="w-full text-left text-xs">
+                              <thead class="bg-[#f8f9fa] border-b border-line font-semibold text-gray-600">
+                                <tr>
+                                  <th class="p-2.5 w-24">Mã hàng</th>
+                                  <th class="p-2.5">Tên hàng</th>
+                                  <th class="p-2.5 text-center w-16">SL</th>
+                                  <th class="p-2.5 text-right w-24">Đơn giá</th>
+                                  <th class="p-2.5 text-right w-20">Giảm giá</th>
+                                  <th class="p-2.5 text-right w-28">Giá nhập (+Phí)</th>
+                                  <th class="p-2.5 text-right w-28">Thành tiền</th>
+                                </tr>
+                              </thead>
+                              <tbody class="divide-y divide-line">
+                                {details.items.length === 0 ? (
+                                  <tr><td colspan="7" class="p-3 text-center text-gray-400">Không có dữ liệu mặt hàng</td></tr>
+                                ) : (
+                                  details.items.map((it: any) => {
+                                    const lineTotal = it.quantity * it.unit_cost_cents - (it.discount_cents || 0);
+                                    return (
+                                      <tr class="hover:bg-gray-50">
+                                        <td class="p-2.5 font-mono text-gray-600">{it.product_code || '--'}</td>
+                                        <td class="p-2.5">
+                                          <span class="font-medium text-gray-900">{it.product_name}</span>
+                                          {it.condition && (
+                                            <span class="ml-1 px-1 py-0.2 rounded text-[10px] bg-gray-100 text-gray-700">
+                                              {it.condition === 'NEW' ? 'Mới' : 'Cũ'}
+                                            </span>
+                                          )}
+                                          {(it.program_code || it.unit_program_code) && (
+                                            <div class="text-[11px] text-blue-600 font-mono mt-0.5">
+                                              🔑 {it.program_code || it.unit_program_code}
+                                            </div>
+                                          )}
+                                        </td>
+                                        <td class="p-2.5 text-center font-bold tabular-nums text-gray-900">{it.quantity}</td>
+                                        <td class="p-2.5 text-right tabular-nums text-gray-700">{formatVND(it.unit_cost_cents)}</td>
+                                        <td class="p-2.5 text-right tabular-nums text-gray-500">{formatVND(it.discount_cents || 0)}</td>
+                                        <td class="p-2.5 text-right tabular-nums font-semibold text-emerald-700" title="Giá vốn thực tế đã phân bổ chi phí">
+                                          {formatVND(it.final_cost_cents || it.unit_cost_cents)}
+                                        </td>
+                                        <td class="p-2.5 text-right tabular-nums font-bold text-gray-900">{formatVND(lineTotal)}</td>
+                                      </tr>
+                                    );
+                                  })
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+
+                          <!-- BẢNG TỔNG KẾT TIỀN & GHI CHÚ -->
+                          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                            <div>
+                              {r.note && (
+                                <div class="p-3 bg-gray-50 rounded-lg border border-line text-xs text-gray-700">
+                                  <strong class="block text-gray-800 mb-1">Ghi chú phiếu:</strong>
+                                  {r.note}
+                                </div>
+                              )}
+                            </div>
+                            <div class="space-y-1.5 text-xs text-right bg-gray-50/50 p-3 rounded-lg border border-line ml-auto w-full md:max-w-sm">
+                              <div class="flex justify-between text-gray-600">
+                                <span>Số lượng mặt hàng:</span>
+                                <strong class="text-gray-900">{details.items.length}</strong>
+                              </div>
+                              <div class="flex justify-between text-gray-600">
+                                <span>Tổng tiền hàng:</span>
+                                <strong class="text-gray-900">{formatVND(r.total_amount_cents + (r.discount_cents || 0) - (r.extra_fee_cents || 0))}</strong>
+                              </div>
+                              {r.discount_cents > 0 && (
+                                <div class="flex justify-between text-emerald-600">
+                                  <span>Giảm giá:</span>
+                                  <strong>-{formatVND(r.discount_cents)}</strong>
+                                </div>
+                              )}
+                              {r.extra_fee_cents > 0 && (
+                                <div class="flex justify-between text-gray-700">
+                                  <span>Chi phí trả NCC ({r.extra_fee_category || 'Phụ thu'}):</span>
+                                  <strong>+{formatVND(r.extra_fee_cents)}</strong>
+                                </div>
+                              )}
+                              {r.other_fee_cents > 0 && (
+                                <div class="flex justify-between text-indigo-700">
+                                  <span>Chi phí nhập khác ({r.other_fee_category || 'Vận chuyển'}):</span>
+                                  <strong>+{formatVND(r.other_fee_cents)}</strong>
+                                </div>
+                              )}
+                              <div class="flex justify-between border-t border-line pt-1 text-sm font-bold text-gray-900">
+                                <span>Cần trả NCC:</span>
+                                <span class="text-blue-700">{formatVND(r.total_amount_cents)}</span>
+                              </div>
+                              <div class="flex justify-between text-emerald-700 font-semibold">
+                                <span>Tiền đã trả NCC:</span>
+                                <span>{formatVND(r.paid_amount_cents)}</span>
+                              </div>
+                              {r.debt_amount_cents > 0 && (
+                                <div class="flex justify-between text-amber-700 font-bold border-t border-line pt-1">
+                                  <span>Còn nợ NCC:</span>
+                                  <span>{formatVND(r.debt_amount_cents)}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <!-- TAB 2: LỊCH SỬ THANH TOÁN (SỔ QUỸ) CHUẨN THEO ẢNH KIOTVIET -->
+                        <div id={`tab-cash-${r.id}`} class="tab-content hidden space-y-3">
+                          <div class="border border-line rounded-lg overflow-hidden">
+                            <table class="w-full text-left text-xs">
+                              <thead class="bg-[#f8f9fa] border-b border-line font-semibold text-gray-600">
+                                <tr>
+                                  <th class="p-2.5">Mã phiếu</th>
+                                  <th class="p-2.5">Thời gian</th>
+                                  <th class="p-2.5">Người tạo</th>
+                                  <th class="p-2.5">Phương thức</th>
+                                  <th class="p-2.5 text-center">Trạng thái</th>
+                                  <th class="p-2.5 text-right">Tiền chi</th>
+                                </tr>
+                              </thead>
+                              <tbody class="divide-y divide-line">
+                                {details.cash_transactions.length === 0 ? (
+                                  <tr>
+                                    <td colspan="6" class="p-4 text-center text-gray-400">Chưa có giao dịch sổ quỹ nào phát sinh cho phiếu này</td>
+                                  </tr>
+                                ) : (
+                                  details.cash_transactions.map((tx: any) => (
+                                    <tr class="hover:bg-gray-50">
+                                      <td class="p-2.5 font-mono font-bold text-blue-600">
+                                        <a href="/admin/cash" class="hover:underline">{tx.transaction_code}</a>
+                                      </td>
+                                      <td class="p-2.5 text-gray-500 whitespace-nowrap">{formatDate(tx.created_at)}</td>
+                                      <td class="p-2.5 text-gray-800">{tx.created_by || 'Kiệt'}</td>
+                                      <td class="p-2.5 text-gray-700">{tx.account_type === 'BANK' ? 'Chuyển khoản' : 'Tiền mặt'}</td>
+                                      <td class="p-2.5 text-center">
+                                        <span class={`px-2 py-0.5 rounded text-[10.5px] font-bold ${tx.flow_type === 'OUT' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                                          {tx.flow_type === 'OUT' ? 'Đã thanh toán' : 'Hoàn tiền hủy'}
+                                        </span>
+                                      </td>
+                                      <td class="p-2.5 text-right font-bold tabular-nums text-gray-900">{formatVND(tx.amount_cents)}</td>
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        <!-- THANH HÀNH ĐỘNG PHÍA DƯỚI CHUẨN 100% ẢNH KIOTVIET -->
+                        <div class="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-line">
+                          <div class="flex items-center gap-2">
+                            {!isCancelled && (
+                              <button
+                                type="button"
+                                class="btn-cancel-receipt inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-300 text-red-700 bg-red-50 hover:bg-red-100 text-xs font-semibold cursor-pointer transition shadow-2xs"
+                                data-id={r.id}
+                                data-code={r.receipt_code}
+                              >
+                                🗑️ Hủy phiếu
+                              </button>
+                            )}
+                            <a
+                              href={`/admin/purchases/${r.id}/print`}
+                              target="_blank"
+                              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100 text-xs font-semibold transition"
+                            >
+                              🖨️ In phiếu
+                            </a>
+                            <a
+                              href={`/admin/units/lookup`}
+                              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100 text-xs font-semibold transition"
+                            >
+                              🏷️ In tem mã
+                            </a>
+                          </div>
+
+                          <div class="flex items-center gap-2">
+                            {!isCancelled && (
+                              <a
+                                href={`/admin/purchases/new?edit_id=${r.id}`}
+                                class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-sm transition"
+                              >
+                                ✏️ Mở phiếu (Sửa)
+                              </a>
+                            )}
+                            {isDraft && (
+                              <a
+                                href={`/admin/purchases/${r.id}`}
+                                class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition"
+                              >
+                                ✓ Hoàn thành nhập
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                </>
+              );
+            })
+          )}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+  import { parseAdminApiResponse } from '../../../features/kgame/apiResponse';
+    function setupPurchaseAccordion() {
+      // 1. Toggle Accordion
+      document.querySelectorAll('.purchase-row').forEach((row) => {
+        row.addEventListener('click', () => {
+          const id = row.getAttribute('data-id');
+          if (!id) return;
+          const drawer = document.getElementById(`drawer-${id}`);
+          if (drawer) {
+            const isHidden = drawer.classList.contains('hidden');
+            document.querySelectorAll('.purchase-drawer').forEach((d) => d.classList.add('hidden'));
+            if (isHidden) {
+              drawer.classList.remove('hidden');
+            }
+          }
+        });
+      });
+
+      // 2. Switch tabs inside drawer
+      document.querySelectorAll('.tab-btn').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const target = btn.getAttribute('data-target');
+          if (!target) return;
+          const drawer = btn.closest('.purchase-drawer');
+          if (!drawer) return;
+
+          drawer.querySelectorAll('.tab-btn').forEach((b) => {
+            b.classList.remove('border-brand', 'text-brand');
+            b.classList.add('border-transparent', 'text-gray-500');
+          });
+          btn.classList.add('border-brand', 'text-brand');
+          btn.classList.remove('border-transparent', 'text-gray-500');
+
+          drawer.querySelectorAll('.tab-content').forEach((c) => c.classList.add('hidden'));
+          const activeTab = drawer.querySelector(`#${target}`);
+          activeTab?.classList.remove('hidden');
+        });
+      });
+
+      // 3. Xử lý Hủy phiếu nhập
+      document.querySelectorAll('.btn-cancel-receipt').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const id = btn.getAttribute('data-id');
+          const code = btn.getAttribute('data-code');
+          if (!id) return;
+
+          const reason = prompt(`Bạn có chắc chắn muốn HỦY phiếu nhập ${code} không?\nNhập lý do hủy (Kho sẽ tự động trừ trả lại số lượng tồn kho và Sổ Quỹ sẽ ghi nhận hoàn tiền):`);
+          if (reason === null) return;
+
+          try {
+            const res = await fetch('/api/admin/purchases', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'cancel',
+                receiptId: Number(id),
+                cancel_reason: reason.trim() || 'Người dùng hủy'
+              })
+            });
+
+            const data = parseAdminApiResponse(await res.json());
+            if (data.success) {
+              alert(`Đã hủy phiếu nhập ${code} thành công!`);
+              window.location.reload();
+            } else {
+              alert(data.error || 'Có lỗi khi hủy phiếu nhập');
+            }
+          } catch (err: any) {
+            alert('Lỗi mạng: ' + err.message);
+          }
+        });
+      });
+    }
+
+    setupPurchaseAccordion();
+    document.addEventListener('astro:page-load', setupPurchaseAccordion);
+  </script>
+</AdminLayout>
